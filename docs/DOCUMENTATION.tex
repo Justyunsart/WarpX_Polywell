@@ -1,0 +1,747 @@
+% ============================================================
+% WarpX Polywell Simulation — Full Technical Documentation
+% Compile with: pdflatex DOCUMENTATION.tex  (run twice for TOC)
+% Or:           latexmk -pdf DOCUMENTATION.tex
+% ============================================================
+\documentclass[11pt, a4paper]{article}
+
+% --- Packages ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{fancyhdr}
+\usepackage{microtype}
+\usepackage{enumitem}
+
+% --- Hyperref colours ---
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    urlcolor=blue!70!black,
+    citecolor=green!50!black,
+    pdftitle={WarpX Polywell Simulation Documentation},
+    pdfauthor={},
+}
+
+% --- Code listing style ---
+\definecolor{codebg}{gray}{0.96}
+\definecolor{codeframe}{gray}{0.75}
+\definecolor{kwcolor}{RGB}{0,0,180}
+\definecolor{strcolor}{RGB}{163,21,21}
+\definecolor{cmtcolor}{RGB}{0,128,0}
+
+\lstset{
+    backgroundcolor=\color{codebg},
+    frame=single,
+    rulecolor=\color{codeframe},
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{kwcolor}\bfseries,
+    stringstyle=\color{strcolor},
+    commentstyle=\color{cmtcolor}\itshape,
+    breaklines=true,
+    breakatwhitespace=true,
+    showstringspaces=false,
+    tabsize=4,
+    captionpos=b,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    xleftmargin=1.5em,
+    framexleftmargin=1.5em,
+}
+
+\lstdefinestyle{bash}{language=bash, morekeywords={conda,mpirun,python}}
+\lstdefinestyle{python}{language=python}
+\lstdefinestyle{plain}{language={}, numbers=none}
+
+% --- Section title formatting ---
+\titleformat{\section}{\large\bfseries\sffamily}{{\thesection}}{0.8em}{}[\vspace{-0.3em}\rule{\linewidth}{0.4pt}]
+\titleformat{\subsection}{\normalsize\bfseries\sffamily}{\thesubsection}{0.8em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.8em}{}
+
+% --- Header / footer ---
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\sffamily\small WarpX Polywell Simulation}
+\rhead{\sffamily\small Documentation}
+\cfoot{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% --- Table helpers ---
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+% ============================================================
+\begin{document}
+
+\begin{titlepage}
+    \centering
+    \vspace*{3cm}
+    {\Huge\bfseries\sffamily WarpX Polywell Simulation\\[0.4em]}
+    {\Large\sffamily Technical Documentation\\[2em]}
+    \rule{0.6\linewidth}{0.6pt}\\[1.5em]
+    {\large Setup, Architecture, and Coding Reference}\\[3em]
+    {\normalsize Last updated: 2026-03-18}
+    \vfill
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Project Overview}
+
+This project uses the \href{https://ecp-warpx.github.io/}{WarpX} particle-in-cell (PIC)
+framework to simulate plasma confinement in a \textbf{polywell} magnetic configuration.
+
+\subsection*{Workflow}
+\begin{enumerate}
+    \item \textbf{Generate external field grids} (B and E) using analytical/numerical
+          methods and write them to openPMD-compliant HDF5 files.
+    \item \textbf{Run a PIC simulation} — WarpX reads those grids at startup, then
+          self-consistently evolves particle trajectories and electromagnetic fields.
+    \item \textbf{Output diagnostics} — field snapshots and particle data are written
+          every 100 steps in openPMD/HDF5 format.
+\end{enumerate}
+
+\subsection*{Key Design Decisions}
+
+\begin{longtable}{L{4.5cm} L{9.5cm}}
+\toprule
+\textbf{Decision} & \textbf{Rationale} \\
+\midrule
+Field pre-computation + caching &
+    B and E fields are expensive to compute. Results are saved to \texttt{.h5} files;
+    the filename encodes all parameters as a cache key so repeated runs skip computation. \\[0.4em]
+openPMD 1.1.0 format &
+    Ensures compatibility with WarpX's \texttt{read\_from\_file} interface,
+    \texttt{openpmd\_viewer}, VisIt, and ParaView. \\[0.4em]
+Non-vectorised E-field loop &
+    The analytic E-field integrand has per-coil coordinate transforms that are
+    difficult to batch; each of the $N^3 \times 6$ evaluations runs in a plain Python loop. \\[0.4em]
+\texttt{do\_initial\_div\_cleaning = 0} &
+    The magpylib B-field is analytically divergence-free ($\nabla \cdot \mathbf{B} = 0$).
+    Divergence cleaning with open boundary conditions introduces numerical errors
+    at startup and is unnecessary. \\
+\bottomrule
+\end{longtable}
+
+\subsection*{Quick Start}
+\begin{lstlisting}[style=bash]
+conda activate warpx-env
+cd /path/to/WarpX
+python inputs/polywell_input.py
+\end{lstlisting}
+
+% ============================================================
+\section{Installation \& Environment Setup}
+
+\subsection{Prerequisites}
+\begin{itemize}
+    \item \href{https://docs.conda.io/en/latest/miniconda.html}{Miniconda} or Anaconda
+    \item Python 3.9+ (managed through conda)
+    \item 8+ CPU cores recommended (\texttt{N} must be divisible by the MPI rank count)
+\end{itemize}
+
+\subsection{Step 1 — Create a Conda Environment}
+\begin{lstlisting}[style=bash]
+conda create -n warpx-env python=3.10
+conda activate warpx-env
+\end{lstlisting}
+
+\subsection{Step 2 — Install WarpX via conda-forge}
+\begin{lstlisting}[style=bash]
+conda install -c conda-forge warpx
+\end{lstlisting}
+Installs \texttt{pywarpx} (the PICMI Python interface) and all compiled WarpX
+dependencies (MPI, HDF5, ADIOS2, etc.).
+
+\subsection{Step 3 — Install Additional Packages}
+\begin{lstlisting}[style=bash]
+conda install -c conda-forge magpylib h5py
+\end{lstlisting}
+
+\begin{longtable}{L{3cm} L{10cm}}
+\toprule
+\textbf{Package} & \textbf{Purpose} \\
+\midrule
+\texttt{magpylib} & Magnetic field calculation for current loop coils \\
+\texttt{h5py}     & Read/write HDF5 field grid files \\
+\texttt{numpy}    & Array math (installed as a WarpX transitive dependency) \\
+\bottomrule
+\end{longtable}
+
+\subsection{Step 4 — Verify}
+\begin{lstlisting}[style=python]
+import pywarpx
+from pywarpx import picmi
+import magpylib
+import h5py
+print("All imports OK")
+\end{lstlisting}
+
+\subsection{Troubleshooting}
+
+\begin{longtable}{L{5.5cm} L{8cm}}
+\toprule
+\textbf{Symptom} & \textbf{Fix} \\
+\midrule
+\texttt{ModuleNotFoundError: src} &
+    Run from project root: \texttt{cd /path/to/WarpX} \\[0.3em]
+MPI domain decomposition error &
+    \texttt{N} must be divisible by rank count. Default \texttt{N=72} divides by
+    1, 2, 3, 4, 6, 8, 9, 12\ldots \\[0.3em]
+Divergence cleaning crash at startup &
+    Keep \texttt{warpx.do\_initial\_div\_cleaning = 0} \\
+\bottomrule
+\end{longtable}
+
+% ============================================================
+\section{Project Structure}
+
+\begin{lstlisting}[style=plain, caption={Directory tree}]
+WarpX/
+|-- docs/                        # Documentation (this directory)
+|   |-- DOCUMENTATION.md         # Combined Markdown reference
+|   |-- DOCUMENTATION.tex        # This LaTeX source
+|   |-- README.md                # Navigation index
+|   |-- packages                 # Conda packages used during development
+|   |-- setup/
+|   |   |-- installation.md
+|   |   `-- project-structure.md
+|   |-- simulation/
+|   |   |-- running.md
+|   |   |-- parameters.md
+|   |   `-- output.md
+|   |-- modules/
+|   |   |-- bext.md
+|   |   |-- eext.md
+|   |   `-- utils.md
+|   `-- physics/
+|       `-- polywell.md
+|
+|-- inputs/
+|   `-- polywell_input.py        # Main entry point (edit parameters here)
+|
+|-- output/
+|   `-- bext/                    # Auto-generated HDF5 field files
+|       `-- *.h5
+|
+|-- src/
+|   |-- bext/
+|   |   |-- bext.py             # B-field HDF5 generation
+|   |   `-- make_collection.py  # magpylib coil geometry
+|   |-- eext/
+|   |   |-- eext.py             # E-field HDF5 population
+|   |   `-- methods.py          # Analytic E-field methods + EMethods enum
+|   |-- post/
+|   |   `-- reader.py           # Post-processing placeholder (empty)
+|   `-- utils/
+|       |-- cyl.py              # Cartesian <-> Cylindrical conversion
+|       `-- paths.py            # ROOT_DIR and BEXT_DIR constants
+|
+`-- tests/                       # Jupyter notebooks for exploration
+    |-- input_fields.ipynb
+    |-- magpylib.ipynb
+    `-- openPMD-viewer.ipynb
+\end{lstlisting}
+
+\subsection*{Key File Roles}
+
+\begin{longtable}{L{5.5cm} L{8.5cm}}
+\toprule
+\textbf{File} & \textbf{Role} \\
+\midrule
+\texttt{inputs/polywell\_input.py} &
+    Entry point. All user parameters. Orchestrates field file generation,
+    WarpX setup, and \texttt{sim.step()}. \\[0.3em]
+\texttt{src/bext/bext.py} &
+    Computes 3D B-field via magpylib; writes openPMD HDF5. \\[0.3em]
+\texttt{src/bext/make\_collection.py} &
+    Builds 6-coil polywell \texttt{magpylib.Collection}. \\[0.3em]
+\texttt{src/eext/eext.py} &
+    Overwrites zeroed E-field datasets with analytically computed values. \\[0.3em]
+\texttt{src/eext/methods.py} &
+    \texttt{fw\_e}, \texttt{bob\_e} functions and \texttt{EMethods} enum. \\[0.3em]
+\texttt{src/utils/paths.py} &
+    \texttt{ROOT\_DIR} and \texttt{BEXT\_DIR}, resolved via \texttt{\_\_file\_\_}. \\[0.3em]
+\texttt{src/utils/cyl.py} &
+    \texttt{toCyl()} and \texttt{toCart()} helpers. \\[0.3em]
+\texttt{output/bext/} &
+    Cached HDF5 field files. Filename encodes all parameters as cache key. \\
+\bottomrule
+\end{longtable}
+
+% ============================================================
+\section{Running a Simulation}
+
+\subsection{Basic Run}
+\begin{lstlisting}[style=bash]
+cd /path/to/WarpX
+conda activate warpx-env
+python inputs/polywell_input.py
+\end{lstlisting}
+
+\subsection{MPI Parallel Run}
+\begin{lstlisting}[style=bash]
+mpirun -n 8 python inputs/polywell_input.py
+\end{lstlisting}
+\textbf{Note:} \texttt{N} must be divisible by the rank count. Default \texttt{N=72}
+works with 8 ranks.
+
+\subsection{Execution Flow}
+
+\begin{lstlisting}[style=plain]
+polywell_input.py
+|
+|-- 1. Read user parameters (top of file)
+|
+|-- 2. Build WarpX objects
+|   |-- picmi.Cartesian3DGrid       -- domain [-L,L]^3, open/absorbing BCs
+|   |-- picmi.ElectromagneticSolver -- Yee scheme, CFL=0.99
+|   |-- picmi.UniformDistribution   -- plasma in +/-(0.11*L)^3
+|   |-- picmi.Species (electron)
+|   `-- picmi.Species (proton)
+|
+|-- 3. make_bext_file(I, b_dia, b_offset, L, N)
+|       |-- cached? -> return path
+|       `-- compute with magpylib, write HDF5, return path
+|
+|-- 4. fill_eext_file(path, method, e_dia, e_offset, Q, L, N)  [optional]
+|       |-- cached? -> return path
+|       `-- compute analytically, update HDF5, rename, return path
+|
+|-- 5. warpx.read_fields_from_path = ext_path
+|
+|-- 6. picmi.Simulation + add_species + add_diagnostic
+|
+`-- 7. sim.step()   -- runs for max_steps
+\end{lstlisting}
+
+\subsection{Field File Caching}
+
+\begin{longtable}{L{2.5cm} L{11.5cm}}
+\toprule
+\textbf{Type} & \textbf{Filename pattern} \\
+\midrule
+B only &
+\texttt{B\_ext\_I-\{I\}A\_D-\{dia\}m\_Off-\{offset\}m\_L-\{L\}m\_N-\{N\}.h5} \\[0.3em]
+B + E &
+\texttt{B\_ext\_...\_ E\_ext\_Q-\{Q\}\_D-\{e\_dia\}m\_offset-\{e\_offset\}m\_C\_L-\{L\}m\_N-\{N\}.h5} \\
+\bottomrule
+\end{longtable}
+
+Old files are not deleted automatically --- clean \texttt{output/bext/} manually when needed.
+
+% ============================================================
+\section{Input Parameters Reference}
+
+All parameters live in the \texttt{=== USER INPUTS ===} block at the top of
+\texttt{inputs/polywell\_input.py}.
+
+\subsection{Simulation Control}
+\begin{longtable}{L{3.5cm} L{2cm} L{1.5cm} L{6.5cm}}
+\toprule
+\textbf{Parameter} & \textbf{Default} & \textbf{Unit} & \textbf{Description} \\
+\midrule
+\texttt{max\_steps} & \texttt{10000} & steps & Total PIC time steps \\
+\texttt{warpx.const\_dt} & \texttt{1e-12} & s & Fixed time step size \\
+\texttt{p\_density} & \texttt{1e18} & m$^{-3}$ & Number density of each plasma species \\
+\bottomrule
+\end{longtable}
+
+\subsection{B-Field — Polywell Coils}
+\begin{longtable}{L{3.5cm} L{2cm} L{1.5cm} L{6.5cm}}
+\toprule
+\textbf{Parameter} & \textbf{Default} & \textbf{Unit} & \textbf{Description} \\
+\midrule
+\texttt{I}        & \texttt{1e6} & A & Current through each coil \\
+\texttt{b\_dia}   & \texttt{1}   & m & Coil diameter \\
+\texttt{b\_offset}& \texttt{1.1} & m & Distance from origin to coil center \\
+\bottomrule
+\end{longtable}
+
+\subsection{E-Field — Charged Rings}
+\begin{longtable}{L{3.5cm} L{2cm} L{1.5cm} L{6.5cm}}
+\toprule
+\textbf{Parameter} & \textbf{Default} & \textbf{Unit} & \textbf{Description} \\
+\midrule
+\texttt{e\_method} & \texttt{"FW"} & -- & Method name, or \texttt{None} to disable E-field \\
+\texttt{Q}         & \texttt{1e-9} & C  & Total charge per ring \\
+\texttt{e\_dia}    & \texttt{0.75} & m  & Ring diameter \\
+\texttt{e\_offset} & \texttt{1.1}  & m  & Distance from origin to ring center \\
+\bottomrule
+\end{longtable}
+
+\subsubsection*{Available E-field methods}
+\begin{longtable}{L{2.5cm} L{3cm} L{7.5cm}}
+\toprule
+\textbf{Name} & \textbf{Function} & \textbf{Notes} \\
+\midrule
+\texttt{"FW"}  & \texttt{fw\_e()}  & 500-point Riemann sum over $\theta \in [0, 2\pi]$ \\
+\texttt{"BOB"} & \texttt{bob\_e()} & 100-point normalised integration \\
+\texttt{None}  & ---               & E-field disabled; zero arrays used \\
+\bottomrule
+\end{longtable}
+
+\subsection{Grid}
+\begin{longtable}{L{4.5cm} L{2.5cm} L{1.5cm} L{5cm}}
+\toprule
+\textbf{Parameter} & \textbf{Default} & \textbf{Unit} & \textbf{Description} \\
+\midrule
+\texttt{L} & \texttt{3} & m & Domain half-length; full domain $[-L, L]^3$ \\
+\texttt{N} & \texttt{72} & -- & Grid cells per axis \\
+\texttt{number\_per\_cell\_each\_dim} & \texttt{[10,10,10]} & -- & Macro-particles per cell per dimension \\
+\texttt{plasma\_bounding} & \texttt{0.11} & fraction & Plasma initialised within $\pm(L \times 0.11)$ \\
+\bottomrule
+\end{longtable}
+
+\subsection{Solver Options}
+\begin{lstlisting}[style=python]
+# Active:
+solver = picmi.ElectromagneticSolver(grid=grid, method="Yee", cfl=0.99)
+
+# Alternatives (commented out in file):
+# solver = picmi.ElectrostaticSolver(grid=grid)
+# solver = picmi.HybridPICSolver(...)  # does NOT support E-field from file
+\end{lstlisting}
+
+\subsection{Diagnostics}
+
+Both write every 100 steps in openPMD/HDF5 format.
+
+\begin{longtable}{L{3cm} L{10cm}}
+\toprule
+\textbf{Diagnostic} & \textbf{Data} \\
+\midrule
+\texttt{field\_diag} & \texttt{Bx}, \texttt{By}, \texttt{Bz}, \texttt{Jx}, \texttt{Jy}, \texttt{Jz}, \texttt{part\_per\_cell} \\
+\texttt{part\_diag}  & \texttt{x}, \texttt{y}, \texttt{z}, \texttt{ux}, \texttt{uy}, \texttt{uz}, \texttt{weighting} (for \texttt{plasma\_e} and \texttt{plasma\_i}) \\
+\bottomrule
+\end{longtable}
+
+% ============================================================
+\section{Output Files}
+
+\subsection{External Field Files (\texttt{output/bext/*.h5})}
+
+Pre-computed inputs to WarpX. Generated once, cached, reused.
+
+\subsubsection*{HDF5 Internal Layout}
+\begin{lstlisting}[style=plain]
+/ (root)
+    attrs: openPMD="1.1.0", basePath="/data/%T/", meshesPath="meshes/", ...
+`-- data/
+    `-- 1/
+        attrs: time=0.0, dt=0.0, timeUnitSI=1.0
+        `-- meshes/
+            |-- B/
+            |   attrs: geometry="cartesian",
+            |          gridSpacing=[dx,dy,dz],
+            |          gridGlobalOffset=[-L,-L,-L],
+            |          unitDimension=[0,1,1,-2,0,0,-1]
+            |   |-- x  float64 (N,N,N)  unitSI=1.0 (Tesla)
+            |   |-- y  float64 (N,N,N)
+            |   `-- z  float64 (N,N,N)
+            `-- E/
+                attrs: geometry="cartesian",
+                       gridSpacing=[dx,dy,dz],
+                       gridGlobalOffset=[-L,-L,-L],
+                       unitDimension=[1,1,-3,-1,0,0,0]
+                |-- x  float64 (N,N,N)  unitSI=1.0 (V/m)
+                |-- y  float64 (N,N,N)
+                `-- z  float64 (N,N,N)
+\end{lstlisting}
+
+\subsubsection*{Reading with h5py}
+\begin{lstlisting}[style=python]
+import h5py
+with h5py.File("output/bext/B_ext_....h5", "r") as f:
+    Bx = f["data/1/meshes/B/x"][:]    # shape (N, N, N), Tesla
+    Ex = f["data/1/meshes/E/x"][:]    # shape (N, N, N), V/m
+    spacing = f["data/1/meshes/B"].attrs["gridSpacing"]
+    offset  = f["data/1/meshes/B"].attrs["gridGlobalOffset"]
+\end{lstlisting}
+
+\subsubsection*{Reading with openPMD-viewer}
+\begin{lstlisting}[style=python]
+from openpmd_viewer import OpenPMDTimeSeries
+ts = OpenPMDTimeSeries("output/bext/")
+Bz, info = ts.get_field(field="B", coord="z", iteration=1)
+\end{lstlisting}
+
+\subsection{Simulation Diagnostic Files}
+
+Written every 100 steps by WarpX during \texttt{sim.step()}.
+
+\begin{longtable}{L{3cm} L{3.5cm} L{7cm}}
+\toprule
+\textbf{Diagnostic} & \textbf{Quantity} & \textbf{Description} \\
+\midrule
+\texttt{field\_diag} & \texttt{Bx, By, Bz} & Magnetic field (T) \\
+                     & \texttt{Jx, Jy, Jz} & Current density (A/m$^2$) \\
+                     & \texttt{part\_per\_cell} & Macro-particles per cell \\
+\midrule
+\texttt{part\_diag} & \texttt{x, y, z} & Positions (m) \\
+                    & \texttt{ux, uy, uz} & Normalised momenta $\gamma v/c$ \\
+                    & \texttt{weighting} & Macro-particle statistical weight \\
+\bottomrule
+\end{longtable}
+
+% ============================================================
+\section{Module: \texttt{src/bext}}
+
+Generates the 3D B-field grid and writes it as an openPMD HDF5 file.
+
+\subsection{\texttt{make\_collection.py}}
+
+\subsubsection*{\texttt{make\_polywell\_collection(a, dia, d)} $\to$ \texttt{magpylib.Collection}}
+
+Six circular current loops at $\pm x$, $\pm y$, $\pm z$ with alternating polarities.
+
+\begin{longtable}{L{1.5cm} L{3cm} L{2.5cm} L{6cm}}
+\toprule
+\textbf{Coil} & \textbf{Position} & \textbf{Current} & \textbf{Rotation} \\
+\midrule
+s1 & $(-d,\,0,\,0)$ & $+a$ & 90° around Y \\
+s2 & $(+d,\,0,\,0)$ & $-a$ & 90° around Y \\
+s3 & $(0,\,-d,\,0)$ & $-a$ & $-90°$ around X \\
+s4 & $(0,\,+d,\,0)$ & $+a$ & $-90°$ around X \\
+s5 & $(0,\,0,\,-d)$ & $+a$ & 90° around Z \\
+s6 & $(0,\,0,\,+d)$ & $-a$ & 90° around Z \\
+\bottomrule
+\end{longtable}
+
+\subsection{\texttt{bext.py}}
+
+\subsubsection*{\texttt{get\_bext\_file\_name(I, dia, offset, L, N)} $\to$ \texttt{str}}
+
+Returns the expected filename for a given parameter set.
+\begin{lstlisting}[style=python]
+get_bext_file_name(1e6, 1.0, 1.1, 3, 72)
+# -> "B_ext_I-1000000.0A_D-1m_Off-1.1m_L-3m_N-72.h5"
+\end{lstlisting}
+
+\subsubsection*{\texttt{make\_bext\_file(I, dia, offset, L, N)} $\to$ \texttt{Path}}
+
+Main public function. Returns cached path if file exists; otherwise:
+\begin{enumerate}
+    \item \texttt{make\_polywell\_collection(I, dia, offset)} $\to$ \texttt{magpylib.Collection}
+    \item \texttt{np.meshgrid(linspace($-L$,$L$,$N$), indexing=\textquotesingle ij\textquotesingle)} $\to$ mesh shape $(N,N,N,3)$
+    \item \texttt{collection.getB(mesh)} $\to$ $B_{x}$, $B_{y}$, $B_{z}$ each $(N,N,N)$
+    \item \texttt{\_make\_empty\_ext\_h5(path)} $\to$ skeleton HDF5 with openPMD metadata
+    \item \texttt{\_fill\_h5\_file(...)} $\to$ writes B datasets; initialises E to zero
+\end{enumerate}
+
+\subsubsection*{openPMD attributes written by \texttt{\_make\_empty\_ext\_h5}}
+
+\begin{longtable}{L{4.5cm} L{9cm}}
+\toprule
+\textbf{Attribute} & \textbf{Value} \\
+\midrule
+\texttt{openPMD}           & \texttt{"1.1.0"} \\
+\texttt{basePath}          & \texttt{"/data/\%T/"} \\
+\texttt{iterationEncoding} & \texttt{"fileBased"} \\
+B \texttt{unitDimension}   & \texttt{[0, 1, 1, -2, 0, 0, -1]} (Tesla) \\
+E \texttt{unitDimension}   & \texttt{[1, 1, -3, -1, 0, 0, 0]} (V/m) \\
+\bottomrule
+\end{longtable}
+
+% ============================================================
+\section{Module: \texttt{src/eext}}
+
+Computes the E-field from charged rings and overwrites the zeroed placeholder
+in the B-field HDF5.
+
+\subsection{\texttt{methods.py}}
+
+\subsubsection*{\texttt{fw\_e(r, z, a, Q, resolution=500)} $\to$ \texttt{(E\_r, E\_z)}}
+
+Numerical integration over $\theta \in [0,\,2\pi]$ with linear charge density
+$\lambda = Q/(2\pi a)$:
+
+\begin{align}
+E_r &= \frac{\lambda a}{4\pi\varepsilon_0}
+       \int_0^{2\pi} \frac{r - a\cos\theta}{D^3}\,d\theta \\[6pt]
+E_z &= \frac{\lambda a\,z}{4\pi\varepsilon_0}
+       \int_0^{2\pi} \frac{1}{D^3}\,d\theta \\[4pt]
+D   &= \sqrt{r^2 + a^2 - 2ar\cos\theta + z^2}
+\end{align}
+
+\subsubsection*{\texttt{bob\_e(r, z, a, Q, resolution=100)} $\to$ \texttt{(E\_r, E\_z)}}
+
+Alternative normalised integration over $\theta \in [0,\,\pi]$ using
+$k = 8.99\times10^9\,\text{N}\cdot\text{m}^2/\text{C}^2$.
+Clamps $r$ to $10^{-10}$ near axis to avoid division by zero.
+
+\subsubsection*{\texttt{EMethods} Enum}
+\begin{lstlisting}[style=python]
+class EMethods(Enum):
+    FW  = (fw_e,)
+    BOB = (bob_e,)
+
+# Usage:
+method = EMethods["FW"].value[0]   # -> fw_e callable
+\end{lstlisting}
+
+\subsection{\texttt{eext.py}}
+
+\subsubsection*{\texttt{fill\_eext\_file(filepath, method, dia, offset, Q, L, N)} $\to$ \texttt{Path}}
+
+Main public function. Returns immediately if renamed output already exists; otherwise:
+
+\begin{enumerate}
+    \item \texttt{get\_e\_field\_data(method, ...)} $\to$ $E_x$, $E_y$, $E_z$ shape $(N,N,N)$
+    \item \texttt{\_fill\_efield\_datasets(...)} overwrites E datasets in HDF5
+    \item \texttt{filepath.rename(new\_filepath)} appends E-field parameters to filename
+\end{enumerate}
+
+\subsubsection*{Per-point inner loop in \texttt{get\_e\_field\_data}}
+
+For every grid point $(i,j,k)$ and each of the 6 coils:
+\begin{lstlisting}[style=plain]
+orient_point(coil, cartesian_point)
+    -> subtract coil.position
+    -> apply coil.orientation.inv()
+toCyl(local_cartesian) -> (r, phi, z)
+method(r, z, a, Q)     -> (E_r, E_z)   [E_phi = 0 by symmetry]
+toCart(E_r, phi, E_z)  -> (dEx, dEy, dEz)
+accumulate into Ex[i,j,k], Ey[i,j,k], Ez[i,j,k]
+\end{lstlisting}
+
+\noindent\textbf{Performance:} $\mathcal{O}(N^3 \times 6)$ non-vectorised calls.
+At $N=72$: ${\approx}2.2\times10^6$ evaluations. Progress logged every 10\%.
+
+% ============================================================
+\section{Module: \texttt{src/utils}}
+
+\subsection{\texttt{cyl.py}}
+
+\subsubsection*{\texttt{toCyl(coord)} $\to$ \texttt{ndarray([$\rho$, $\varphi$, $z$])}}
+
+\[
+\rho = \sqrt{x^2+y^2},\quad
+\varphi = \mathrm{arctan2}(y,x),\quad
+z = z
+\]
+
+\subsubsection*{\texttt{toCart(r, theta, z)} $\to$ \texttt{(x, y, z)}}
+
+\[
+x = r\cos\theta,\quad y = r\sin\theta,\quad z = z
+\]
+
+\noindent\textbf{Note:} \texttt{theta} is the azimuthal angle of the \emph{position}
+(from \texttt{toCyl}), not of the vector. Correct because $E_\varphi = 0$ by symmetry.
+
+\subsection{\texttt{paths.py}}
+
+\begin{lstlisting}[style=python]
+_script_dir = Path(__file__).resolve().parent   # src/utils/
+ROOT_DIR    = _script_dir.parent.parent          # WarpX/
+BEXT_DIR    = ROOT_DIR / "output" / "bext"      # WarpX/output/bext/
+\end{lstlisting}
+
+\begin{longtable}{L{3cm} L{3.5cm} L{6.5cm}}
+\toprule
+\textbf{Constant} & \textbf{Resolves to} & \textbf{Used by} \\
+\midrule
+\texttt{ROOT\_DIR} & Project root     & Internal derivation \\
+\texttt{BEXT\_DIR} & \texttt{output/bext/} & \texttt{src/bext/bext.py} \\
+\bottomrule
+\end{longtable}
+
+\subsubsection*{Adding a new path}
+\begin{lstlisting}[style=python]
+# In paths.py
+NEW_DIR = ROOT_DIR / "output" / "new_dir"
+
+# Elsewhere
+from src.utils.paths import NEW_DIR
+\end{lstlisting}
+
+% ============================================================
+\section{Physics Background: Polywell Fusion}
+
+\subsection{The Polywell Concept}
+
+A polywell is an inertial electrostatic confinement (IEC) fusion device combining:
+\begin{enumerate}
+    \item \textbf{Magnetic cusps} from a polyhedral coil arrangement --- create a
+          magnetic well that confines electrons near the centre.
+    \item \textbf{Electrostatic potential well} --- the confined electron cloud builds
+          negative space charge that electrostatically accelerates positive ions inward.
+\end{enumerate}
+
+\subsection{Magnetic Configuration}
+
+Six coils at $\pm x$, $\pm y$, $\pm z$ carry alternating currents (Table~\ref{tab:coils}).
+The resulting field forms magnetic mirrors at the cusps; electrons are reflected back by
+the stronger field at the cusp regions.
+
+\subsection{Electrostatic Field}
+
+Modelled as six uniformly charged rings (same geometry as coils).
+The field at cylindrical position $(r,z)$ from a ring of radius $a$ and charge $Q$:
+
+\begin{align}
+E_r &= \frac{\lambda a}{4\pi\varepsilon_0}
+       \int_0^{2\pi} \frac{r - a\cos\theta}{D^3}\,d\theta \\[6pt]
+E_z &= \frac{\lambda a\,z}{4\pi\varepsilon_0}
+       \int_0^{2\pi} \frac{1}{D^3}\,d\theta \\[4pt]
+\lambda &= \frac{Q}{2\pi a}, \qquad
+D = \sqrt{r^2 + a^2 - 2ar\cos\theta + z^2}
+\end{align}
+
+\subsection{PIC Simulation Setup}
+
+\begin{longtable}{L{5cm} L{9cm}}
+\toprule
+\textbf{Property} & \textbf{Value} \\
+\midrule
+Grid               & 3D Cartesian $[-L,L]^3$ \\
+Field BCs          & Open \\
+Particle BCs       & Absorbing \\
+Solver             & Electromagnetic, Yee scheme, CFL = 0.99 \\
+Species            & Electrons + Protons \\
+Initial distribution & Uniform within $\pm 0.11L$ per axis \\
+Initial velocity   & $0.9c$ in $z$-direction \\
+External fields    & Pre-computed B and E, fixed (read-only) \\
+Divergence cleaning & Disabled (\texttt{do\_initial\_div\_cleaning = 0}) \\
+\bottomrule
+\end{longtable}
+
+\subsection{Key Physical Scales}
+
+\begin{longtable}{L{4cm} L{4cm} L{6cm}}
+\toprule
+\textbf{Quantity} & \textbf{Value} & \textbf{Notes} \\
+\midrule
+Domain size       & $6\,\mathrm{m}^3$   & $2L$ per side \\
+Coil radius       & 0.5 m              & \texttt{b\_dia} / 2 \\
+Coil current      & 1 MA               & drives B-field \\
+Plasma density    & $10^{18}\,\mathrm{m}^{-3}$ & \\
+Time step         & 1 ps               & \texttt{const\_dt} \\
+Total sim. time   & 10 ns              & \texttt{max\_steps} $\times$ \texttt{const\_dt} \\
+\bottomrule
+\end{longtable}
+
+\subsection{References}
+
+\begin{itemize}
+    \item Bussard, R.W. (1991). ``Some Physics Considerations of Magnetic
+          Inertial-Electrostatic Confinement.'' \textit{Fusion Technology}, 19(2).
+    \item WarpX documentation: \url{https://ecp-warpx.github.io/}
+    \item magpylib documentation: \url{https://magpylib.readthedocs.io/}
+    \item openPMD standard: \url{https://github.com/openPMD/openPMD-standard}
+\end{itemize}
+
+\end{document}

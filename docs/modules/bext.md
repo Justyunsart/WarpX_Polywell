@@ -1,0 +1,151 @@
+# `src/bext` — External B-field Module
+
+Generates a 3D magnetic field grid from a polywell coil configuration and stores it
+in an openPMD-compliant HDF5 file that WarpX reads at simulation startup.
+
+---
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `src/bext/bext.py` | Top-level HDF5 creation and B-field population |
+| `src/bext/make_collection.py` | Builds the magpylib coil geometry |
+
+---
+
+## `make_collection.py`
+
+### `make_polywell_collection(a, dia, d)`
+
+Constructs a `magpylib.Collection` of 6 circular current loops arranged in a polywell
+formation (one coil on each face of a cube centered at the origin).
+
+```
+Parameters:
+    a    : float — current in Amperes
+    dia  : float — coil diameter in metres
+    d    : float — distance from origin to coil center in metres
+
+Returns:
+    magpylib.Collection
+```
+
+**Coil placement and orientation:**
+
+| Coil | Position | Current direction | Rotation |
+|---|---|---|---|
+| s1 | `(-d, 0, 0)` | `+a` | 90° around Y |
+| s2 | `(+d, 0, 0)` | `-a` | 90° around Y |
+| s3 | `(0, -d, 0)` | `-a` | -90° around X |
+| s4 | `(0, +d, 0)` | `+a` | -90° around X |
+| s5 | `(0, 0, -d)` | `+a` | 90° around Z |
+| s6 | `(0, 0, +d)` | `-a` | 90° around Z |
+
+Alternating currents on opposing faces create the characteristic magnetic well structure.
+
+### `make_helmholtz_collection(a, dia, d)` (test utility)
+
+Creates a two-coil Helmholtz pair for testing/validation. Not used in the production pipeline.
+
+---
+
+## `bext.py`
+
+### `get_bext_file_name(I, dia, offset, L, N)` → `str`
+
+Returns the expected filename for a given set of parameters. Used to check for cached files.
+
+```python
+# Example
+name = get_bext_file_name(1e6, 1.0, 1.1, 3, 72)
+# → "B_ext_I-1000000.0A_D-1m_Off-1.1m_L-3m_N-72.h5"
+```
+
+### `make_bext_file(I, dia, offset, L, N)` → `Path`
+
+**Main public function.** Checks whether a cached file already exists; if not, computes
+and writes a new one.
+
+```
+Parameters:
+    I      : float — coil current (A)
+    dia    : float — coil diameter (m)
+    offset : float — coil center distance from origin (m)
+    L      : int   — grid half-length in each axis (m)
+    N      : int   — number of grid points per axis
+
+Returns:
+    pathlib.Path — absolute path to the .h5 file
+```
+
+**Internal pipeline when file does not exist:**
+
+1. Call `make_polywell_collection(I, dia, offset)` to build the magpylib coil set
+2. Create a 3D meshgrid: `linspace(-L, L, N)` along each axis (indexing `'ij'`)
+3. Reshape mesh to `(N, N, N, 3)` as expected by magpylib's `getB()`
+4. Call `collection.getB(mesh)` — vectorised field evaluation over all grid points
+5. Decompose result into `Bx, By, Bz` arrays of shape `(N, N, N)`
+6. Call `_make_empty_ext_h5(file_path)` to create the skeleton HDF5
+7. Call `_fill_h5_file(...)` to write the B-field data (E-field set to zeros as placeholder)
+
+### `_make_empty_ext_h5(filename)` (private)
+
+Creates a skeleton HDF5 file with all required openPMD metadata groups and attributes,
+but no actual field data yet.
+
+**openPMD attributes set on root:**
+
+| Attribute | Value |
+|---|---|
+| `openPMD` | `"1.1.0"` |
+| `basePath` | `"/data/%T/"` |
+| `meshesPath` | `"meshes/"` |
+| `iterationEncoding` | `"fileBased"` |
+
+**Per-field-group attributes (`B` and `E`):**
+
+| Attribute | Value |
+|---|---|
+| `geometry` | `"cartesian"` |
+| `gridSpacing` | `[1.0, 1.0, 1.0]` (placeholder, overwritten later) |
+| `gridGlobalOffset` | `[0.0, 0.0, 0.0]` (placeholder, overwritten later) |
+| `unitDimension` | B: `[0, 1, 1, -2, 0, 0, -1]` (Tesla); E: `[1, 1, -3, -1, 0, 0, 0]` (V/m) |
+
+### `_fill_h5_file(filepath, Bx, By, Bz, grid_spacing, grid_offset)` (private)
+
+Writes actual B-field data and zeroed E-field placeholders into an existing skeleton file.
+
+- Updates `gridSpacing` and `gridGlobalOffset` on both B and E groups
+- Creates `data/1/meshes/B/{x,y,z}` datasets from `Bx, By, Bz`
+- Creates `data/1/meshes/E/{x,y,z}` datasets as `zeros_like(Bx)`
+- Each dataset gets `unitSI=1.0` and `position=[0.5, 0.5, 0.5]` (cell-centered)
+
+---
+
+## Data Flow Summary
+
+```
+make_bext_file(I, dia, offset, L, N)
+        │
+        ├─ [file exists?] ──yes──→ return cached path
+        │
+        └─ no
+           │
+           ├─ make_polywell_collection(I, dia, offset)
+           │        → magpylib.Collection (6 Circle coils)
+           │
+           ├─ np.meshgrid(-L..L, N points, indexing='ij')
+           │        → mesh shape (N, N, N, 3)
+           │
+           ├─ collection.getB(mesh)
+           │        → B shape (N, N, N, 3)
+           │        → Bx, By, Bz each (N, N, N)
+           │
+           ├─ _make_empty_ext_h5(path)
+           │        → skeleton HDF5 with openPMD metadata
+           │
+           └─ _fill_h5_file(path, Bx, By, Bz, spacing, offset)
+                    → B datasets written, E zeroed
+                    → return path
+```

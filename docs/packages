@@ -1,0 +1,4 @@
+Downloaded packages during development:
+- WarpX (and dependencies), done through conda-forge
+- magpylib
+- h5py
