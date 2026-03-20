@@ -4,6 +4,7 @@ Functions to fill the external fields file with the E-field computed with parame
 from src.bext.make_collection import make_polywell_collection # This is a convenient container for getting rotations
 from magpylib.current import Circle
 from src.utils.cyl import toCyl, toCart
+from src.utils.storage import get_backend
 import numpy as np
 import pathlib
 from typing import Callable
@@ -140,17 +141,21 @@ def fill_eext_file(filepath, method:Callable, dia, offset, Q, L, N):
     print(f"[fill_eext_file] Starting E-field external file generation: dia={dia}m, offset={offset}m, "
           f"Q={Q}C, L={L}m, N={N}")
 
+    backend = get_backend(subdir="bext")
+
     ## To even determine if the methods should be run, check if a file with the same name exists
         # the E-field parameters to append the filepath name with
     filepath_addition = f"_E_ext_Q-{Q}_D-{dia}m_offset-{offset}m_C_L-{L}m_N-{N}.h5"
-        # rename and return the file
+        # derive the final file name from the input filepath stem
     filepath = pathlib.Path(filepath) # ensure pathlib can work with the input filepath
-    new_filepath = filepath.parent / (filepath.stem + filepath_addition)
-    print(f"[fill_eext_file] Target output path: {new_filepath}")
+    new_name = filepath.stem + filepath_addition
+    print(f"[fill_eext_file] Target output name: {new_name}")
 
-    if new_filepath.is_file():
-        print(f"[fill_eext_file] File already exists, skipping computation and returning: {new_filepath}")
-        return new_filepath
+    if backend.exists(new_name):
+        print(f"[fill_eext_file] File already exists, skipping computation and returning.")
+        if hasattr(backend, "download"):
+            return backend.download(new_name)
+        return backend.resolve(new_name)
     else:
         print(f"[fill_eext_file] File does not exist. Continuing with .h5 generation")
 
@@ -165,10 +170,10 @@ def fill_eext_file(filepath, method:Callable, dia, offset, Q, L, N):
     print(f"[fill_eext_file] Writing E-field data to file with grid_offset={grid_offset}")
     _fill_efield_datasets(filepath, Ex, Ey, Ez, grid_spacing, grid_offset)
 
-    ## After all .h5 writing operations are done, change the file's name
-    ## to include the E-field information as well.
-    print(f"[fill_eext_file] Renaming file: {filepath} -> {new_filepath}")
-    filepath.rename(new_filepath)
-    print(f"[fill_eext_file] Done. Output file: {new_filepath}")
+    ## After all .h5 writing operations are done, route the renamed file through the backend.
+    print(f"[fill_eext_file] Saving as '{new_name}' via storage backend")
+    filepath.rename(filepath.parent / new_name)  # rename locally first
+    result = backend.save(filepath.parent / new_name, new_name)
+    print(f"[fill_eext_file] Done. Output: {result}")
 
-    return new_filepath
+    return result

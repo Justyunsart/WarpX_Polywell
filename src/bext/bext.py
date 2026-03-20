@@ -6,7 +6,7 @@ from src.bext.make_collection import make_polywell_collection
 import h5py
 import numpy as np
 from datetime import datetime
-from src.utils.paths import BEXT_DIR #where to place the external B-field .h5 files
+from src.utils.storage import get_backend
 
 def _make_empty_ext_h5(filename)->None:
     """
@@ -106,16 +106,23 @@ def make_bext_file(I, dia, offset, L:int, N:int):
     I, dia, and offset are parameters for the coils.
     L and N are parameters for the grid. (L = length in each axis, N = resolution in each axis)
     """
+    backend = get_backend(subdir="bext")
+
     # get the name of the requested file
     file_name = get_bext_file_name(I, dia, offset, L, N)
-    file_path = BEXT_DIR / file_name # the full path of where the file should be/will be
 
     # return file if it exists. If not, continue with the pipeline for making the file
-    if file_path.is_file():
+    if backend.exists(file_name):
         print("File exists, returning")
-        return file_path
+        # For DriveBackend, download to get a usable local path; LocalBackend resolve() is already local.
+        if hasattr(backend, "download"):
+            return backend.download(file_name)
+        return backend.resolve(file_name)
     else:
         print("File does not exist. Continuing with .h5 generation")
+
+    # local staging path where h5py will write the file
+    file_path = backend.resolve(file_name)
 
     ###############
     # CREATE DATA #
@@ -146,4 +153,5 @@ def make_bext_file(I, dia, offset, L:int, N:int):
                   grid_spacing=grid_spacing,
                   grid_offset=(-L, -L, -L))
 
-    return file_path # returns the full path to the file
+    # route the finished file through the storage backend
+    return backend.save(file_path, file_name)

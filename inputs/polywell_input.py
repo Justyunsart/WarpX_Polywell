@@ -3,6 +3,7 @@ from src.bext.bext import make_bext_file
 from src.eext.eext import fill_eext_file # should run AFTER B-field init.
 from src.eext.methods import EMethods # enum registry for available methods
 import numpy as np
+import scipy.constants as sc
 
 constants = picmi.constants
 #######################
@@ -24,6 +25,10 @@ e_method = "FW" # either None (no E-field) or a name of an entry in EMethods (ye
 Q = 1e-9 # Coulombs
 e_dia = 0.75 # m
 e_offset = 1.1 # m
+
+    # Plasma temperatures #
+Te = 50e3 * sc.eV  # electron temperature: 50 keV (typical polywell target)
+Ti = 1e3  * sc.eV  # ion temperature: 1 keV (ions gain energy from potential well)
 
 # GRID #
 L = 3 # length of the simulation grid
@@ -70,20 +75,37 @@ solver = picmi.ElectromagneticSolver(
 ###################
 # === SPECIES === #
 ###################
-# first create the plasma distribution
-plasma_distribution = picmi.UniformDistribution(
+# Thermal rms velocities from temperature (non-relativistic approximation)
+# For 50 keV electrons ve_rms ~ 1.3e8 m/s (mildly relativistic but WarpX handles this)
+ve_rms = np.sqrt(Te / sc.m_e)
+vi_rms = np.sqrt(Ti / sc.m_p)
+
+plasma_bounds_lo = np.array([-lx, -ly, -lz]) * plasma_bounding
+plasma_bounds_hi = np.array([ lx,  ly,  lz]) * plasma_bounding
+
+# Electrons: isotropic Maxwellian at Te, no net drift
+electron_distribution = picmi.UniformDistribution(
     density=p_density,
-    lower_bound=(np.array([-lx, -ly, -lz]) * plasma_bounding),
-    upper_bound=(np.array([lx, ly, lz]) * plasma_bounding),
-    fill_in = True,
-    directed_velocity=[0.0, 0.0, 0.9 * picmi.constants.c]
+    lower_bound=plasma_bounds_lo,
+    upper_bound=plasma_bounds_hi,
+    fill_in=True,
+    rms_velocity=[ve_rms, ve_rms, ve_rms],
 )
-# you can now create the plasma species (plasma electrons, ions)
+# Ions: isotropic Maxwellian at Ti (cooler; will be accelerated by potential well)
+ion_distribution = picmi.UniformDistribution(
+    density=p_density,
+    lower_bound=plasma_bounds_lo,
+    upper_bound=plasma_bounds_hi,
+    fill_in=True,
+    rms_velocity=[vi_rms, vi_rms, vi_rms],
+)
+
+# create the plasma species with their respective distributions
 plasma_e = picmi.Species(
-    particle_type='electron', name='plasma_e', initial_distribution=plasma_distribution,
+    particle_type='electron', name='plasma_e', initial_distribution=electron_distribution,
 )
 plasma_i = picmi.Species(
-    particle_type='proton', name='plasma_i', initial_distribution=plasma_distribution,
+    particle_type='proton', name='plasma_i', initial_distribution=ion_distribution,
 )
 
 ##################
