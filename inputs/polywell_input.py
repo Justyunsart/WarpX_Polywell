@@ -1,4 +1,4 @@
-from pywarpx import picmi, warpx
+from pywarpx import picmi, warpx, particles
 from src.bext.bext import make_bext_file
 from src.eext.eext import fill_eext_file # should run AFTER B-field init.
 from src.eext.methods import EMethods # enum registry for available methods
@@ -10,9 +10,9 @@ constants = picmi.constants
 # === USER INPUTS === #
 #######################
 # SIM #
-max_steps = 10000
-warpx.const_dt = 1e-12
-p_density = 1e18
+max_steps = 1000
+warpx.const_dt = 1e-9
+p_density = 1e12
 
     # B-Field # (polywell)
 I = 1e6 # current of coil, Amperes
@@ -31,7 +31,7 @@ Te = 50e3 * sc.eV  # electron temperature: 50 keV (typical polywell target)
 Ti = 1e3  * sc.eV  # ion temperature: 1 keV (ions gain energy from potential well)
 
 # GRID #
-L = 3 # length of the simulation grid
+L = 2 # length of the simulation grid
 N = 72 # resolution of each grid axis. My system runs with 8 cores, so this must be divisible by 8
 number_per_cell_each_dim = [10, 10, 10] # number of macroparticles in each cell
 
@@ -108,13 +108,16 @@ plasma_i = picmi.Species(
     particle_type='proton', name='plasma_i', initial_distribution=ion_distribution,
 )
 
+plasma_e.do_not_deposit = 1
+plasma_i.do_not_deposit = 1 # test particles
+
 ##################
 # === FIELDS === #
 ##################
 ## set external B-field initialization mode
     # note: if both B and E fields are set to "read_from_file", it expects both to be in the same file.
-warpx.B_ext_field_init_style = "read_from_file"
-warpx.E_ext_field_init_style = "read_from_file"
+particles.B_ext_particle_init_style = "read_from_file"
+particles.E_ext_particle_init_style = "read_from_file"
     # errors were happening without turning initial div cleaning off when doing an EM solver with open bc
 warpx.do_initial_div_cleaning = 0 # not needed, since magpylib's solution is already div. free
 
@@ -128,7 +131,7 @@ if e_method is not None: # update file with E-field information (if a method is 
 
 
 ## tell WarpX to read the file
-warpx.read_fields_from_path = ext_path # tell the program to read the .h5 file
+particles.read_fields_from_path = ext_path # tell the program to read the .h5 file
 
 ###############
 # === SIM === #
@@ -142,12 +145,12 @@ sim = picmi.Simulation(
 )
 
 # add species to the simulation
-sim.add_species(
+"""sim.add_species(
     plasma_e,
     layout=picmi.GriddedLayout(
         grid=grid, n_macroparticle_per_cell=number_per_cell_each_dim,
     ),
-)
+)"""
 sim.add_species(
     plasma_i,
     layout=picmi.GriddedLayout(
@@ -159,20 +162,27 @@ sim.add_species(
 field_diag = picmi.FieldDiagnostic(
     name="field_diag",
     grid=grid,
-    period=100,
-    data_list=["Bx", "By", "Bz", "Jx", "Jy", "Jz", "part_per_cell"],
+    period=10,
+    data_list=["Bx", "By", "Bz",
+               "Bx_fp_external", "By_fp_external", "Bz_fp_external",
+               "Ex_fp_external", "Ey_fp_external", "Ez_fp_external",
+               "Jx", "Jy", "Jz", "part_per_cell"],
     warpx_format='openpmd',  # Options: 'openpmd', 'plotfile', 'checkpoint'
     warpx_openpmd_backend='h5',  # For openPMD: 'h5', 'bp', or 'json'
 )
+field_diag.diag_type = "Full"
+field_diag.fields_to_plot = ['Bx', 'By', "Bz"]
 
 part_diag = picmi.ParticleDiagnostic(
     name="part_diag",
-    period=100,
-    species=[plasma_e, plasma_i],
+    period=10,
+    species=[plasma_i],
     data_list=["x", "y", "z", "ux", "uy", "uz", "weighting"],
     warpx_format='openpmd',  # Options: 'openpmd', 'plotfile', 'checkpoint'
     warpx_openpmd_backend='h5'  # For openPMD: 'h5', 'bp', or 'json'
 )
+#warpx.sort_intervals = -1
+
 
 sim.add_diagnostic(field_diag)
 sim.add_diagnostic(part_diag)
