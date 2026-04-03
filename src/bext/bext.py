@@ -1,12 +1,77 @@
 """
-To utilize warpx's ability to set external fields with a grid file,
-we want to create an .h5 file for the B-field grid.
+External B-field module for WarpX polywell simulations.
+
+Supports two pipelines, selectable via setup_bext():
+  - "file"     : Pre-compute B on a grid with magpylib, write to openPMD HDF5,
+                  and tell WarpX to read_from_file. (original behavior)
+  - "analytic" : Generate parser expression strings from the exact elliptic-integral
+                  solution, and tell WarpX to parse_B_ext_function. No grid file needed.
 """
 from src.bext.make_collection import make_polywell_collection
+from src.bext.analytic import build_bext_expressions
 import h5py
 import numpy as np
 from datetime import datetime
 from src.utils.storage import get_backend
+
+
+# ================================================================
+# Public entry point — pick your pipeline here
+# ================================================================
+
+def setup_bext(method, particles, warpx_module=None, *,
+               I, dia, offset, L=None, N=None):
+    """
+    Configure WarpX's external B-field for particles.
+
+    Parameters
+    ----------
+    method : str
+        "file"     — magpylib grid → openPMD HDF5 → read_from_file
+        "analytic" — elliptic-integral parser expressions → parse_B_ext_function
+    particles : pywarpx.particles module
+        The `particles` object from pywarpx (used to set init style and paths).
+    warpx_module : pywarpx.warpx module, optional
+        The `warpx` object from pywarpx (needed for my_constants in analytic mode).
+    I       : float — coil current (A)
+    dia     : float — coil diameter (m)
+    offset  : float — coil center distance from origin (m)
+    L       : float — grid half-length (m). Required for "file" method.
+    N       : int   — grid resolution per axis. Required for "file" method.
+
+    Returns
+    -------
+    ext_path : str or None
+        For "file" mode, returns the path to the generated .h5 file.
+        For "analytic" mode, returns None (no file involved).
+    """
+    method = method.lower()
+
+    if method == "file":
+        if L is None or N is None:
+            raise ValueError("'file' method requires L and N grid parameters.")
+        particles.B_ext_particle_init_style = "read_from_file"
+        ext_path = make_bext_file(I, dia, offset, L, N)
+        particles.read_fields_from_path = ext_path
+        return ext_path
+
+    elif method == "analytic":
+        particles.B_ext_particle_init_style = "parse_B_ext_function"
+        exprs = build_bext_expressions(I, dia, offset)
+        particles.Bx_external_particle_function = exprs['Bx']
+        particles.By_external_particle_function = exprs['By']
+        particles.Bz_external_particle_function = exprs['Bz']
+        print(f"[setup_bext] Analytic B-field configured (6 coils, I={I} A, dia={dia} m, offset={offset} m)")
+        print(f"[setup_bext] Expression lengths: Bx={len(exprs['Bx'])}, By={len(exprs['By'])}, Bz={len(exprs['Bz'])} chars")
+        return None
+
+    else:
+        raise ValueError(f"Unknown B-field method '{method}'. Use 'file' or 'analytic'.")
+
+
+# ================================================================
+# File-based pipeline (original implementation, unchanged)
+# ================================================================
 
 def _make_empty_ext_h5(filename)->None:
     """

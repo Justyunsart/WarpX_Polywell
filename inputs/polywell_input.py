@@ -1,5 +1,5 @@
 from pywarpx import picmi, warpx, particles
-from src.bext.bext import make_bext_file
+from src.bext.bext import setup_bext, make_bext_file
 from src.eext.eext import fill_eext_file # should run AFTER B-field init.
 from src.eext.methods import EMethods # enum registry for available methods
 import numpy as np
@@ -15,6 +15,7 @@ warpx.const_dt = 1e-9
 p_density = 1e12
 
     # B-Field # (polywell)
+b_method = "analytic" # "analytic" (parser expressions, no grid file) or "file" (magpylib -> HDF5 grid)
 I = 1e6 # current of coil, Amperes
 b_dia = 1 # diameter of coil, m
 b_offset = 1.1 # dist. of coil center from origin, m
@@ -115,23 +116,38 @@ plasma_i.do_not_deposit = 1 # test particles
 # === FIELDS === #
 ##################
 ## set external B-field initialization mode
-    # note: if both B and E fields are set to "read_from_file", it expects both to be in the same file.
-particles.B_ext_particle_init_style = "read_from_file"
-particles.E_ext_particle_init_style = "read_from_file"
     # errors were happening without turning initial div cleaning off when doing an EM solver with open bc
-warpx.do_initial_div_cleaning = 0 # not needed, since magpylib's solution is already div. free
+warpx.do_initial_div_cleaning = 0 # not needed, since both solutions are already div. free
 
-## dynamically create the .h5 grid input based on sim params
-ext_path = make_bext_file(I, b_dia, b_offset, L, N) # make and fill B-field info.
-if e_method is not None: # update file with E-field information (if a method is selected)
+## Configure B-field via the modular dispatcher
+ext_path = setup_bext(
+    method=b_method,
+    particles=particles,
+    warpx_module=warpx,
+    I=I, dia=b_dia, offset=b_offset,
+    L=L, N=N,                          # only used by "file" method; ignored by "analytic"
+)
+
+## Configure E-field (file-based only for now)
+    # note: "file" B-field and E-field share the same .h5 file.
+    # "analytic" B-field means E needs its own file, OR its own parse setup.
+if e_method is not None:
     method = EMethods[e_method].value[0]
-    ext_path = fill_eext_file(ext_path, method,
-                              e_dia, e_offset,
-                              Q, L, N)
-
-
-## tell WarpX to read the file
-particles.read_fields_from_path = ext_path # tell the program to read the .h5 file
+    if b_method == "file":
+        # B already made the .h5 file — append E-field data to it
+        particles.E_ext_particle_init_style = "read_from_file"
+        ext_path = fill_eext_file(ext_path, method,
+                                  e_dia, e_offset,
+                                  Q, L, N)
+        particles.read_fields_from_path = ext_path
+    else:
+        # Analytic B doesn't make an .h5. E-field needs its own file.
+        particles.E_ext_particle_init_style = "read_from_file"
+        dummy_ext = make_bext_file(0, b_dia, b_offset, L, N)  # zero-current B file as scaffold
+        ext_path = fill_eext_file(dummy_ext, method,
+                                  e_dia, e_offset,
+                                  Q, L, N)
+        particles.read_fields_from_path = ext_path
 
 ###############
 # === SIM === #
