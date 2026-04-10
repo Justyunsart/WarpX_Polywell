@@ -33,7 +33,8 @@ to simulate plasma confinement in a polywell magnetic configuration.
 ### Source Modules
 | Document | Description |
 |---|---|
-| [bext module](modules/bext.md) | External B-field grid generation (`src/bext/`) |
+| [bext module](modules/bext.md) | External B-field generation (`src/bext/`) — file-based and analytic modes |
+| [External Particle Field Modes](modules/external_particle_fields.md) | In-depth guide: physics, API reference, and how-to for both B-field pipelines |
 | [eext module](modules/eext.md) | External E-field grid generation (`src/eext/`) |
 | [utils module](modules/utils.md) | Coordinate helpers and path definitions (`src/utils/`) |
 
@@ -61,6 +62,7 @@ Subsequent runs with the same parameters reuse the cached file.
 
 ## Key Design Decisions
 
-- **Field pre-computation**: B and E fields are computed once, cached as `.h5` files, and reloaded on repeat runs. The file name encodes all parameters, acting as a cache key.
+- **Dual B-field modes**: The B-field can be supplied as a pre-computed grid file (`"file"` mode) or as exact analytic expressions evaluated per-particle (`"analytic"` mode). Set `b_method` in the input deck to switch. See [External Particle Field Modes](modules/external_particle_fields.md).
+- **Field caching**: In file mode, B and E fields are computed once, cached as `.h5` files, and reloaded on repeat runs. The file name encodes all parameters, acting as a cache key.
 - **openPMD format**: All field files follow the openPMD 1.1.0 standard so they are compatible with WarpX's `read_from_file` interface and can be inspected with `openPMD-viewer`.
 - **Non-vectorized E-field**: The analytic E-field integration loops over every grid point. This is slow for large `N`; see [eext module](modules/eext.md) for details.

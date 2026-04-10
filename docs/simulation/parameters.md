@@ -20,12 +20,16 @@ These parameters define the six circular current loops that create the polywell 
 
 | Parameter | Default | Type | Description |
 |---|---|---|---|
+| `b_method` | `"analytic"` | `str` | B-field pipeline: `"analytic"` (exact per-particle expressions) or `"file"` (pre-computed HDF5 grid) |
 | `I` | `1e6` | `float` (A) | Current through each coil in Amperes |
 | `b_dia` | `1` | `float` (m) | Diameter of each circular coil |
 | `b_offset` | `1.1` | `float` (m) | Distance from origin to each coil center |
 
 The six coils are placed at ±x, ±y, ±z at distance `b_offset`, with alternating current
 directions. See [make_collection.py](../modules/bext.md#make_polywell_collection) for geometry.
+
+For a detailed comparison of the two modes, see
+[External Particle Field Modes](../modules/external_particle_fields.md).
 
 ---
 

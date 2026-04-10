@@ -22,8 +22,13 @@ def fw_e(r, z, a, Q, resolution=500, **kwargs):
     def integrand_Ez(theta, r, z):
         D = np.sqrt(r ** 2 + a ** 2 - 2 * a * r * np.cos(theta) + z ** 2)
         return 1 / D ** 3
-    theta = np.linspace(0, 2 * np.pi, resolution)
-    dtheta = theta[1] - theta[0]
+    # Periodic quadrature: use endpoint=False so the `resolution` samples
+    # form a clean period (theta = 0, 2pi/N, ..., 2pi*(N-1)/N). Using
+    # endpoint=True double-counts theta=0 and theta=2pi, which leaks a
+    # non-zero residual into integrals of odd functions like cos(theta)
+    # and blows up as a spurious radial field on the coil axis.
+    theta = np.linspace(0, 2 * np.pi, resolution, endpoint=False)
+    dtheta = 2 * np.pi / resolution
     int_Er = np.sum(integrand_Er(theta, r, z)) * dtheta
     int_Ez = np.sum(integrand_Ez(theta, r, z)) * dtheta
     E_r = (1 / (4 * np.pi * epsilon_0)) * lambda_ * a * int_Er

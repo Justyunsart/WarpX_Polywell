@@ -1,7 +1,11 @@
 # `src/bext` — External B-field Module
 
-Generates a 3D magnetic field grid from a polywell coil configuration and stores it
-in an openPMD-compliant HDF5 file that WarpX reads at simulation startup.
+Provides the external magnetic field for WarpX polywell simulations. Supports
+two modes selectable at runtime: a **file-based** pipeline (pre-computed grid in
+an openPMD HDF5 file) and an **analytic** pipeline (exact elliptic-integral
+expressions evaluated per-particle). See
+[External Particle Field Modes](external_particle_fields.md) for the full
+conceptual background, physics, and user guide.
 
 ---
 
@@ -9,8 +13,9 @@ in an openPMD-compliant HDF5 file that WarpX reads at simulation startup.
 
 | File | Purpose |
 |---|---|
-| `src/bext/bext.py` | Top-level HDF5 creation and B-field population |
-| `src/bext/make_collection.py` | Builds the magpylib coil geometry |
+| `src/bext/bext.py` | `setup_bext()` dispatcher + file-based HDF5 creation |
+| `src/bext/analytic.py` | Analytic elliptic-integral kernel (NumPy + AMReX parser expressions) |
+| `src/bext/make_collection.py` | Builds the magpylib coil geometry (file mode only) |
 
 ---
 
@@ -51,6 +56,26 @@ Creates a two-coil Helmholtz pair for testing/validation. Not used in the produc
 ---
 
 ## `bext.py`
+
+### `setup_bext(method, particles, warpx_module, *, I, dia, offset, L, N)`
+
+**Modular dispatcher.** Configures WarpX's external B-field for either file-based
+or analytic mode. This is the only function the input deck needs to call.
+
+```
+Parameters:
+    method       : str — "file" or "analytic"
+    particles    : pywarpx.particles module
+    warpx_module : pywarpx.warpx module (optional)
+    I, dia, offset : coil parameters
+    L, N         : grid parameters (required for "file" mode only)
+
+Returns:
+    str or None — .h5 path (file mode) or None (analytic mode)
+```
+
+See [External Particle Field Modes](external_particle_fields.md) for detailed
+behavior of each mode.
 
 ### `get_bext_file_name(I, dia, offset, L, N)` → `str`
 
@@ -120,6 +145,33 @@ Writes actual B-field data and zeroed E-field placeholders into an existing skel
 - Creates `data/1/meshes/B/{x,y,z}` datasets from `Bx, By, Bz`
 - Creates `data/1/meshes/E/{x,y,z}` datasets as `zeros_like(Bx)`
 - Each dataset gets `unitSI=1.0` and `position=[0.5, 0.5, 0.5]` (cell-centered)
+
+---
+
+## `analytic.py`
+
+Provides the analytic B-field pipeline: exact elliptic-integral evaluation with
+no grid files. Contains both a NumPy interface (for testing/plotting) and an
+AMReX parser expression builder (for WarpX runtime).
+
+### `build_bext_expressions(I, dia, offset)` → `dict`
+
+Builds three AMReX parser expression strings for the full 6-coil polywell field.
+Each expression uses native `comp_ellint_1(k)` / `comp_ellint_2(k)` functions
+and local-variable semicolon syntax. Returns `{'Bx': ..., 'By': ..., 'Bz': ...}`.
+
+### `B_polywell(X, Y, Z, I, dia, offset)` → `(Bx, By, Bz)`
+
+NumPy evaluation of the same 6-coil field. Used for testing and validation — not
+called by WarpX at runtime.
+
+### `B_single_loop(rho, zeta, a, I)` → `(B_rho, B_zeta)`
+
+Core kernel — single current loop field in cylindrical coordinates via
+`scipy.special.ellipk` / `ellipe`.
+
+For the full API reference and physics background, see
+[External Particle Field Modes](external_particle_fields.md).
 
 ---
 

@@ -52,7 +52,12 @@ def get_e_field_data(method:Callable, dia, offset, Q, L, N):
     interval = _x[1] - _x[0]
     grid_spacing = [interval, interval, interval]
     X, Y, Z = np.meshgrid(_x, _y, _z, indexing='ij')  # (3, N, N, N)
-    Ex = Ey = Ez = np.zeros((N,N,N)) # generate empty output arrays
+    # Three SEPARATE arrays. Do not write `Ex = Ey = Ez = np.zeros(...)`:
+    # that makes all three names alias the same buffer, so every +=
+    # accumulates into a single array and Ex, Ey, Ez end up identical.
+    Ex = np.zeros((N, N, N))
+    Ey = np.zeros((N, N, N))
+    Ez = np.zeros((N, N, N))
     print(f"[get_e_field_data] Grid created: {N}x{N}x{N} = {N**3} points, spacing={interval:.4f}m")
 
     # constants for all function calls
@@ -75,18 +80,28 @@ def get_e_field_data(method:Callable, dia, offset, Q, L, N):
             rot_cartesian = orient_point(c=c, point=input_cartesian)
             input_cylindrical = toCyl(rot_cartesian)
 
-            ## get output
-            E_phi = input_cylindrical[1] # unused in calculation, but needed for end result
-            E_r, E_z = method(r=input_cylindrical[0], z=input_cylindrical[2],
-                              a=a, Q=Q)
+            ## get output in the coil's LOCAL cylindrical frame
+            phi_local = input_cylindrical[1]
+            E_r, E_z_local = method(r=input_cylindrical[0], z=input_cylindrical[2],
+                                    a=a, Q=Q)
 
-            ## format output
-            # convert results to cartesian
-            _Ex, _Ey, _Ez = toCart(E_r, E_phi, E_z)
-            # accumulate
-            Ex[i, j, k] += _Ex
-            Ey[i, j, k] += _Ey
-            Ez[i, j, k] += _Ez
+            ## Build the field vector in the coil's LOCAL cartesian frame.
+            ## The radial unit vector at this point is (cos phi, sin phi, 0)
+            ## expressed in local cartesian, so E_r decomposes as below.
+            E_local = np.array([E_r * np.cos(phi_local),
+                                E_r * np.sin(phi_local),
+                                E_z_local])
+
+            ## Rotate the field vector back to the LAB frame using the
+            ## coil's forward orientation. Without this step, coils with
+            ## non-identity orientation contribute in the wrong basis and
+            ## the total field loses the expected octahedral symmetry of
+            ## the 6-coil polywell.
+            E_lab = c.orientation.apply(E_local)
+
+            Ex[i, j, k] += E_lab[0]
+            Ey[i, j, k] += E_lab[1]
+            Ez[i, j, k] += E_lab[2]
 
     print(f"[get_e_field_data] E-field computation complete. "
           f"Peak magnitude: {np.max(np.sqrt(Ex**2 + Ey**2 + Ez**2)):.4e} V/m")
