@@ -1,7 +1,10 @@
+import os
+import shutil
 from pywarpx import picmi, warpx, particles
 from src.bext.bext import setup_bext, make_bext_file
 from src.eext.eext import fill_eext_file # should run AFTER B-field init.
 from src.eext.methods import EMethods # enum registry for available methods
+from src.db.runs import RunsDB, new_run_dir
 import numpy as np
 import scipy.constants as sc
 
@@ -15,7 +18,7 @@ warpx.const_dt = 1e-9
 p_density = 1e12
 
     # B-Field # (polywell)
-b_method = "analytic" # "analytic" (parser expressions, no grid file) or "file" (magpylib -> HDF5 grid)
+b_method = "file" # "analytic" (parser expressions, no grid file) or "file" (magpylib -> HDF5 grid)
 I = 1e6 # current of coil, Amperes
 b_dia = 1 # diameter of coil, m
 b_offset = 1.1 # dist. of coil center from origin, m
@@ -204,4 +207,59 @@ sim.add_diagnostic(field_diag)
 sim.add_diagnostic(part_diag)
 
 
-sim.step()
+#######################
+# === RUN + LOGGING ===
+#######################
+# Allocate a per-run directory, snapshot this input script for reproducibility,
+# and register the run in the SQLite runs database before stepping. Diagnostics
+# are redirected into the run directory by chdir'ing before sim.step().
+run_dir = new_run_dir()
+try:
+    shutil.copy2(__file__, run_dir / "polywell_input.py")
+except Exception:
+    pass
+
+run_params = {
+    # simulation control
+    "max_steps":         max_steps,
+    "const_dt":          warpx.const_dt,
+    # plasma
+    "p_density":         p_density,
+    "Te_eV":             float(Te / sc.eV),
+    "Ti_eV":             float(Ti / sc.eV),
+    "plasma_bounding":   plasma_bounding,
+    # B-field
+    "b_method":          b_method,
+    "coil_current":      I,
+    "b_dia":             b_dia,
+    "b_offset":          b_offset,
+    # E-field
+    "e_method":          str(e_method),
+    "e_charge":          Q,
+    "e_dia":             e_dia,
+    "e_offset":          e_offset,
+    # grid
+    "grid_L":            L,
+    "grid_N":            N,
+    "particles_per_cell": number_per_cell_each_dim,
+    # solver
+    "solver_type":       type(solver).__name__,
+    "solver_method":     getattr(solver, "method", None),
+    "cfl":               getattr(solver, "cfl", None),
+    # diagnostics
+    "diag_period":       field_diag.period,
+    "diag_path":         str(run_dir),
+}
+
+db = RunsDB()
+_prev_cwd = os.getcwd()
+try:
+    with db.run_context(run_dir, run_params) as run_id:
+        print(f"[runs.db] registered run id={run_id} at {run_dir}")
+        os.chdir(run_dir)
+        try:
+            sim.step()
+        finally:
+            os.chdir(_prev_cwd)
+finally:
+    db.close()

@@ -5,7 +5,7 @@ Supports two pipelines, selectable via setup_bext():
   - "file"     : Pre-compute B on a grid with magpylib, write to openPMD HDF5,
                   and tell WarpX to read_from_file. (original behavior)
   - "analytic" : Generate parser expression strings from the exact elliptic-integral
-                  solution, and tell WarpX to parse_B_ext_function. No grid file needed.
+                  solution, and tell WarpX to parse_B_ext_particle_function. No grid file needed.
 """
 from src.bext.make_collection import make_polywell_collection
 from src.bext.analytic import build_bext_expressions
@@ -28,7 +28,7 @@ def setup_bext(method, particles, warpx_module=None, *,
     ----------
     method : str
         "file"     — magpylib grid → openPMD HDF5 → read_from_file
-        "analytic" — elliptic-integral parser expressions → parse_B_ext_function
+        "analytic" — elliptic-integral parser expressions → parse_B_ext_particle_function
     particles : pywarpx.particles module
         The `particles` object from pywarpx (used to set init style and paths).
     warpx_module : pywarpx.warpx module, optional
@@ -56,11 +56,16 @@ def setup_bext(method, particles, warpx_module=None, *,
         return ext_path
 
     elif method == "analytic":
-        particles.B_ext_particle_init_style = "parse_B_ext_function"
+        particles.B_ext_particle_init_style = "parse_B_ext_particle_function"
         exprs = build_bext_expressions(I, dia, offset)
-        particles.Bx_external_particle_function = exprs['Bx']
-        particles.By_external_particle_function = exprs['By']
-        particles.Bz_external_particle_function = exprs['Bz']
+        # WarpX's ParmParse keys literally include the argument signature:
+        # `particles.Bx_external_particle_function(x,y,z,t)`. That's not a
+        # legal Python attribute name, so we have to use setattr rather than
+        # dot syntax — pywarpx's Bucket stores the key verbatim, which makes
+        # it findable on the C++ side.
+        setattr(particles, "Bx_external_particle_function(x,y,z,t)", exprs['Bx'])
+        setattr(particles, "By_external_particle_function(x,y,z,t)", exprs['By'])
+        setattr(particles, "Bz_external_particle_function(x,y,z,t)", exprs['Bz'])
         print(f"[setup_bext] Analytic B-field configured (6 coils, I={I} A, dia={dia} m, offset={offset} m)")
         print(f"[setup_bext] Expression lengths: Bx={len(exprs['Bx'])}, By={len(exprs['By'])}, Bz={len(exprs['Bz'])} chars")
         return None

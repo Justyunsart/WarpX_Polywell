@@ -10,10 +10,11 @@ Usage:
 import shutil
 from pathlib import Path
 from src.utils.config import get_config
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
 import os, pickle
+
+# Google Drive API imports are intentionally deferred into DriveBackend
+# methods so users on STORAGE_BACKEND=local don't need the Google packages
+# installed at all. Importing this module must remain side-effect-free.
 
 
 class LocalBackend:
@@ -75,6 +76,19 @@ class DriveBackend:
         self._service = self._build_service()
 
     def _build_service(self):
+        # Lazy imports — only pulled in when DriveBackend is actually used,
+        # so local-backend users don't need these packages installed.
+        try:
+            from google_auth_oauthlib.flow import InstalledAppFlow
+            from google.auth.transport.requests import Request
+            from googleapiclient.discovery import build
+        except ImportError as e:
+            raise ImportError(
+                "DriveBackend requires the Google client libraries. Install with:\n"
+                "    pip install google-api-python-client "
+                "google-auth google-auth-oauthlib"
+            ) from e
+
         SCOPES = ['https://www.googleapis.com/auth/drive.file']
         creds = None
         token_path = os.path.expanduser("~/.config/warpx/token.pickle")
@@ -94,7 +108,6 @@ class DriveBackend:
             with open(token_path, 'wb') as f:
                 pickle.dump(creds, f)
 
-        from googleapiclient.discovery import build
         return build('drive', 'v3', credentials=creds)
 
     def _find_file_id(self, name: str) -> str | None:

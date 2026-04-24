@@ -3,5 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="warpx" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="warpx" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="SSH (sftp://yoonr@100.69.187.46:2222/usr/bin/python3) (2)" project-jdk-type="Python SDK" />
 </project>
