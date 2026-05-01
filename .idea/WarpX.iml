@@ -6,7 +6,7 @@
       <excludeFolder url="file://$MODULE_DIR$/inputs/diags" />
       <excludeFolder url="file://$MODULE_DIR$/output" />
     </content>
-    <orderEntry type="jdk" jdkName="SSH (sftp://yoonr@100.69.187.46:2222/usr/bin/python3) (2)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="warpx" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>
