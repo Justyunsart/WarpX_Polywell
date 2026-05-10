@@ -1,0 +1,39 @@
+# Environment / secrets
+.env
+# Google Drive credentials.json lives under .config/
+.config/
+
+# Local Claude Code state (per-user; .claude/rules/ stays tracked)
+.claude/settings.local.json
+.claude/skills/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Output files (large generated data)
+output/
+
+# WarpX runtime artifacts written next to the deck (pre runs-DB era)
+inputs/Backtrace.*
+inputs/diags/
+inputs/warpx_used_inputs
