@@ -57,7 +57,7 @@ Creates a two-coil Helmholtz pair for testing/validation. Not used in the produc
 
 ## `bext.py`
 
-### `setup_bext(method, particles, warpx_module, *, I, dia, offset, L, N)`
+### `setup_bext(method, particles, warpx_module, *, I, dia, offset, domain)`
 
 **Modular dispatcher.** Configures WarpX's external B-field for either file-based
 or analytic mode. This is the only function the input deck needs to call.
@@ -68,37 +68,45 @@ Parameters:
     particles    : pywarpx.particles module
     warpx_module : pywarpx.warpx module (optional)
     I, dia, offset : coil parameters
-    L, N         : grid parameters (required for "file" mode only)
+    domain       : src.domain.Domain — simulated-domain spec
+                   (required for "file" mode; ignored by "analytic")
 
 Returns:
     str or None — .h5 path (file mode) or None (analytic mode)
 ```
 
-See [External Particle Field Modes](external_particle_fields.md) for detailed
-behavior of each mode.
+The `domain` parameter carries the simulated bounds, cell count, and the symmetry tag.
+The grid sampled in file mode is `linspace(domain.lower[i], domain.upper[i], domain.n_cells[i])`
+per axis — automatically `(N, N, N)` in full mode and `(N/2, N/2, N/2)` in octant mode.
 
-### `get_bext_file_name(I, dia, offset, L, N)` → `str`
+See [External Particle Field Modes](external_particle_fields.md) for detailed
+behavior of each mode, and [domain module](domain.md) for the `Domain` dataclass.
+
+### `get_bext_file_name(I, dia, offset, domain)` → `str`
 
 Returns the expected filename for a given set of parameters. Used to check for cached files.
 
 ```python
 # Example
-name = get_bext_file_name(1e6, 1.0, 1.1, 3, 72)
-# → "B_ext_I-1000000.0A_D-1m_Off-1.1m_L-3m_N-72.h5"
+from src.domain import derive_domain
+d = derive_domain("full", 2, 72)
+name = get_bext_file_name(1e6, 1.0, 1.1, d)
+# → "B_ext_I-1000000.0A_D-1m_Off-1.1m_L-2m_N-72_sym-full.h5"
 ```
 
-### `make_bext_file(I, dia, offset, L, N)` → `Path`
+The `_sym-…` token is essential because the sampled grid differs between modes at the same `L`/`N`.
+
+### `make_bext_file(I, dia, offset, domain)` → `Path`
 
 **Main public function.** Checks whether a cached file already exists; if not, computes
 and writes a new one.
 
 ```
 Parameters:
-    I      : float — coil current (A)
-    dia    : float — coil diameter (m)
-    offset : float — coil center distance from origin (m)
-    L      : int   — grid half-length in each axis (m)
-    N      : int   — number of grid points per axis
+    I      : float          — coil current (A)
+    dia    : float          — coil diameter (m)
+    offset : float          — coil center distance from origin (m)
+    domain : src.domain.Domain — simulated-domain spec
 
 Returns:
     pathlib.Path — absolute path to the .h5 file
@@ -107,12 +115,12 @@ Returns:
 **Internal pipeline when file does not exist:**
 
 1. Call `make_polywell_collection(I, dia, offset)` to build the magpylib coil set
-2. Create a 3D meshgrid: `linspace(-L, L, N)` along each axis (indexing `'ij'`)
-3. Reshape mesh to `(N, N, N, 3)` as expected by magpylib's `getB()`
+2. Create a 3D meshgrid: `linspace(domain.lower[i], domain.upper[i], domain.n_cells[i])` per axis (indexing `'ij'`)
+3. Reshape mesh to `(Nx, Ny, Nz, 3)` as expected by magpylib's `getB()`
 4. Call `collection.getB(mesh)` — vectorised field evaluation over all grid points
-5. Decompose result into `Bx, By, Bz` arrays of shape `(N, N, N)`
+5. Decompose result into `Bx, By, Bz` arrays
 6. Call `_make_empty_ext_h5(file_path)` to create the skeleton HDF5
-7. Call `_fill_h5_file(...)` to write the B-field data (E-field set to zeros as placeholder)
+7. Call `_fill_h5_file(...)` with `grid_offset = domain.lower` to write the B-field data (E-field set to zeros as placeholder)
 
 ### `_make_empty_ext_h5(filename)` (private)
 
@@ -178,7 +186,7 @@ For the full API reference and physics background, see
 ## Data Flow Summary
 
 ```
-make_bext_file(I, dia, offset, L, N)
+make_bext_file(I, dia, offset, domain)
         │
         ├─ [file exists?] ──yes──→ return cached path
         │
@@ -187,17 +195,17 @@ make_bext_file(I, dia, offset, L, N)
            ├─ make_polywell_collection(I, dia, offset)
            │        → magpylib.Collection (6 Circle coils)
            │
-           ├─ np.meshgrid(-L..L, N points, indexing='ij')
-           │        → mesh shape (N, N, N, 3)
+           ├─ np.meshgrid over domain.lower..upper with domain.n_cells points
+           │        → mesh shape (Nx, Ny, Nz, 3)
            │
            ├─ collection.getB(mesh)
-           │        → B shape (N, N, N, 3)
-           │        → Bx, By, Bz each (N, N, N)
+           │        → B shape (Nx, Ny, Nz, 3)
+           │        → Bx, By, Bz each (Nx, Ny, Nz)
            │
            ├─ _make_empty_ext_h5(path)
            │        → skeleton HDF5 with openPMD metadata
            │
-           └─ _fill_h5_file(path, Bx, By, Bz, spacing, offset)
+           └─ _fill_h5_file(path, Bx, By, Bz, spacing, domain.lower)
                     → B datasets written, E zeroed
                     → return path
 ```

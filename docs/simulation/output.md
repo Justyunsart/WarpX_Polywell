@@ -14,15 +14,19 @@ They are inputs to WarpX, not results from it.
 
 **B-field only:**
 ```
-B_ext_I-{I}A_D-{dia}m_Off-{offset}m_L-{L}m_N-{N}.h5
+B_ext_I-{I}A_D-{dia}m_Off-{offset}m_L-{L}m_N-{N}_sym-{symmetry}.h5
 ```
 
 **B + E combined:**
 ```
-B_ext_I-{I}A_D-{dia}m_Off-{offset}m_L-{L}m_N-{N}_E_ext_Q-{Q}_D-{e_dia}m_offset-{e_offset}m_C_L-{L}m_N-{N}.h5
+B_ext_I-{I}A_D-{dia}m_Off-{offset}m_L-{L}m_N-{N}_sym-{symmetry}_E_ext_Q-{Q}_D-{e_dia}m_offset-{e_offset}m_C_L-{L}m_N-{N}.h5
 ```
 
+`L` and `N` are the user-facing full-domain values; `symmetry` discriminates the sampled grid (full vs octant), since the same `L`/`N` yield different actual sampling in each mode.
+
 ### HDF5 Internal Structure
+
+Array shapes match the simulated grid, not the full-domain `N`. In octant mode the arrays are `(N/2, N/2, N/2)` and the `gridGlobalOffset` is `(0, 0, 0)`; in full mode the arrays are `(N, N, N)` with `gridGlobalOffset = (-L, -L, -L)`.
 
 ```
 / (root)
@@ -37,14 +41,14 @@ B_ext_I-{I}A_D-{dia}m_Off-{offset}m_L-{L}m_N-{N}_E_ext_Q-{Q}_D-{e_dia}m_offset-{
         └── meshes/
             ├── B/
             │   ├── attrs: geometry, gridSpacing, gridGlobalOffset, unitDimension, ...
-            │   ├── x   — float64 array, shape (N, N, N), units Tesla
-            │   ├── y   — float64 array, shape (N, N, N), units Tesla
-            │   └── z   — float64 array, shape (N, N, N), units Tesla
+            │   ├── x   — float64 array, shape (Nx, Ny, Nz), units Tesla
+            │   ├── y   — float64 array, shape (Nx, Ny, Nz), units Tesla
+            │   └── z   — float64 array, shape (Nx, Ny, Nz), units Tesla
             └── E/
                 ├── attrs: geometry, gridSpacing, gridGlobalOffset, unitDimension, ...
-                ├── x   — float64 array, shape (N, N, N), units V/m
-                ├── y   — float64 array, shape (N, N, N), units V/m
-                └── z   — float64 array, shape (N, N, N), units V/m
+                ├── x   — float64 array, shape (Nx, Ny, Nz), units V/m
+                ├── y   — float64 array, shape (Nx, Ny, Nz), units V/m
+                └── z   — float64 array, shape (Nx, Ny, Nz), units V/m
 ```
 
 Each component dataset has attributes:
@@ -83,37 +87,43 @@ Bz, info = ts.get_field(field="B", coord="z", iteration=1)
 
 ## 2. Simulation Diagnostic Files
 
-WarpX writes these during the run, every `period=100` steps.
+WarpX writes these during the run, every `period=10` steps. Field and particle diagnostics share `name="diag"` and therefore land in a **single openPMD series** at `diags/diag/openpmd_%T.h5`. Each iteration file contains both `meshes/` (field side) and `particles/` (per-particle records).
 
-### Field Diagnostics (`field_diag/`)
-
-Contains mesh data for each diagnostic period:
+### Field side (mesh data)
 
 | Field | Description |
 |---|---|
 | `Bx`, `By`, `Bz` | Magnetic field components (T) |
+| `Bx_fp_external`, `By_fp_external`, `Bz_fp_external` | External B-field from the file (T) |
+| `Ex_fp_external`, `Ey_fp_external`, `Ez_fp_external` | External E-field from the file (V/m) |
 | `Jx`, `Jy`, `Jz` | Current density components (A/m²) |
-| `part_per_cell` | Number of macro-particles per cell |
+| `part_per_cell` | Number of macroparticles per cell |
 
-### Particle Diagnostics (`part_diag/`)
-
-Contains particle data for each diagnostic period:
+### Particle side (per-particle records)
 
 | Quantity | Description |
 |---|---|
 | `x`, `y`, `z` | Particle positions (m) |
 | `ux`, `uy`, `uz` | Normalised momenta (dimensionless, = γv/c) |
-| `weighting` | Macro-particle weight (number of real particles represented) |
+| `weighting` | Macroparticle weight (number of real particles represented) |
 
-Species recorded: `plasma_e` (electrons) and `plasma_i` (protons).
+Species recorded: `plasma_i` (protons). The electron block is commented out by default in the deck.
 
 ### Diagnostic Format
 
-Both diagnostics use `warpx_format='openpmd'` with `warpx_openpmd_backend='h5'`.
-This produces standard openPMD HDF5 files compatible with:
+Both diagnostics use `warpx_format='openpmd'` with `warpx_openpmd_backend='h5'`. The shared `name=` is what merges them into a single series — give them distinct names to split back into parallel folders.
+
+Compatible with:
 - `openpmd_viewer` (Python)
 - `VisIt` and `ParaView` (with openPMD plugin)
 - `h5py` (direct low-level access)
+
+```python
+from openpmd_viewer import OpenPMDTimeSeries
+ts = OpenPMDTimeSeries("output/runs/run_*/diags/diag/")
+Bz, info     = ts.get_field(field="B", coord="z", iteration=0)
+x, y, z, ux  = ts.get_particle(["x", "y", "z", "ux"], species="plasma_i", iteration=0)
+```
 
 ---
 

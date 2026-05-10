@@ -9,6 +9,7 @@ Supports two pipelines, selectable via setup_bext():
 """
 from src.bext.make_collection import make_polywell_collection
 from src.bext.analytic import build_bext_expressions
+from src.domain import Domain
 import h5py
 import numpy as np
 from datetime import datetime
@@ -20,7 +21,7 @@ from src.utils.storage import get_backend
 # ================================================================
 
 def setup_bext(method, particles, warpx_module=None, *,
-               I, dia, offset, L=None, N=None):
+               I, dia, offset, domain: Domain = None):
     """
     Configure WarpX's external B-field for particles.
 
@@ -33,11 +34,10 @@ def setup_bext(method, particles, warpx_module=None, *,
         The `particles` object from pywarpx (used to set init style and paths).
     warpx_module : pywarpx.warpx module, optional
         The `warpx` object from pywarpx (needed for my_constants in analytic mode).
-    I       : float — coil current (A)
-    dia     : float — coil diameter (m)
-    offset  : float — coil center distance from origin (m)
-    L       : float — grid half-length (m). Required for "file" method.
-    N       : int   — grid resolution per axis. Required for "file" method.
+    I       : float  — coil current (A)
+    dia     : float  — coil diameter (m)
+    offset  : float  — coil center distance from origin (m)
+    domain  : Domain — simulated-domain spec. Required for "file" method.
 
     Returns
     -------
@@ -48,10 +48,10 @@ def setup_bext(method, particles, warpx_module=None, *,
     method = method.lower()
 
     if method == "file":
-        if L is None or N is None:
-            raise ValueError("'file' method requires L and N grid parameters.")
+        if domain is None:
+            raise ValueError("'file' method requires a domain parameter.")
         particles.B_ext_particle_init_style = "read_from_file"
-        ext_path = make_bext_file(I, dia, offset, L, N)
+        ext_path = make_bext_file(I, dia, offset, domain)
         particles.read_fields_from_path = ext_path
         return ext_path
 
@@ -162,24 +162,31 @@ def _fill_h5_file(filepath, Bx, By, Bz, grid_spacing, grid_offset):
             dset.attrs['position'] = np.array([0.5, 0.5, 0.5])
             dset.attrs['shape'] = np.array(Bx.shape)
 
-def get_bext_file_name(I, dia, offset, L, N):
+def get_bext_file_name(I, dia, offset, domain: Domain):
     """
     Returns the name of the external B-field's .h5 file.
-    """
-    return f"B_ext_I-{I}A_D-{dia}m_Off-{offset}m_L-{L}m_N-{N}.h5"
 
-def make_bext_file(I, dia, offset, L:int, N:int):
+    The user-facing L and N (full-domain spec) plus the symmetry tag are
+    embedded so that octant and full-domain caches never collide and the
+    filename stays recognisable to a user reading from the cache dir.
+    """
+    return (
+        f"B_ext_I-{I}A_D-{dia}m_Off-{offset}m_"
+        f"L-{domain.L}m_N-{domain.N}_sym-{domain.symmetry}.h5"
+    )
+
+def make_bext_file(I, dia, offset, domain: Domain):
     """
     Checks whether external B-field file exists, or if it should calculate and
     create a new .h5 file for the given configuration.
 
     I, dia, and offset are parameters for the coils.
-    L and N are parameters for the grid. (L = length in each axis, N = resolution in each axis)
+    domain encodes the simulated grid (bounds, cell count, symmetry tag).
     """
     backend = get_backend(subdir="bext")
 
     # get the name of the requested file
-    file_name = get_bext_file_name(I, dia, offset, L, N)
+    file_name = get_bext_file_name(I, dia, offset, domain)
 
     # return file if it exists. If not, continue with the pipeline for making the file
     if backend.exists(file_name):
@@ -200,18 +207,17 @@ def make_bext_file(I, dia, offset, L:int, N:int):
     # create the magpylib.Collections object to calculate the B-field with
     collection = make_polywell_collection(I, dia, offset)
 
-    # next, create the grid of points for the grid
-    _x = np.linspace(-L, L, N)
-    _y = np.linspace(-L, L, N)
-    _z = np.linspace(-L, L, N)
-    interval = _x[1] - _x[0]
-    grid_spacing = [interval, interval, interval]
-    _mesh = np.meshgrid(_x, _y, _z, indexing='ij') # (3, N, N, N)
-    mesh = np.moveaxis(_mesh, 0, -1) # magpylib's getB() expects (N, N, N, 3)
+    # next, create the grid of points for the simulated domain
+    _x = np.linspace(domain.lower[0], domain.upper[0], domain.n_cells[0])
+    _y = np.linspace(domain.lower[1], domain.upper[1], domain.n_cells[1])
+    _z = np.linspace(domain.lower[2], domain.upper[2], domain.n_cells[2])
+    grid_spacing = [_x[1] - _x[0], _y[1] - _y[0], _z[1] - _z[0]]
+    _mesh = np.meshgrid(_x, _y, _z, indexing='ij') # (3, Nx, Ny, Nz)
+    mesh = np.moveaxis(_mesh, 0, -1) # magpylib's getB() expects (Nx, Ny, Nz, 3)
 
     # calculate the B-field at these grid points
     B = collection.getB(mesh)
-    Bx, By, Bz = np.moveaxis(B, -1, 0) # each array of shape (N, N, N)
+    Bx, By, Bz = np.moveaxis(B, -1, 0) # each array of shape (Nx, Ny, Nz)
 
     #################
     # POPULATE FILE #
@@ -221,7 +227,7 @@ def make_bext_file(I, dia, offset, L:int, N:int):
     # populate the .h5 file
     _fill_h5_file(file_path, Bx, By, Bz,
                   grid_spacing=grid_spacing,
-                  grid_offset=(-L, -L, -L))
+                  grid_offset=tuple(domain.lower))
 
     # route the finished file through the storage backend
     return backend.save(file_path, file_name)

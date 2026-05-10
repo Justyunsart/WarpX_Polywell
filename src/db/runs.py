@@ -86,6 +86,9 @@ CREATE TABLE IF NOT EXISTS runs (
     grid_L              REAL,
     grid_N              INTEGER,
     particles_per_cell  TEXT,
+    symmetry            TEXT    NOT NULL DEFAULT 'full',
+    particle_mode       TEXT    NOT NULL DEFAULT 'density',
+    n_test_particles    INTEGER,
 
     -- solver
     solver_type         TEXT,
@@ -114,7 +117,11 @@ _INDEXES = [
 # Columns added after the original schema. (column_name, ddl_type) -- applied
 # in order by the migration block in __init__. Each is wrapped in its own
 # try/except so a fresh schema (which already has the column) is a no-op.
-_MIGRATIONS: list[tuple[str, str]] = []
+_MIGRATIONS: list[tuple[str, str]] = [
+    ("symmetry", "TEXT NOT NULL DEFAULT 'full'"),
+    ("particle_mode", "TEXT NOT NULL DEFAULT 'density'"),
+    ("n_test_particles", "INTEGER"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -466,7 +473,8 @@ _BACKFILL_COLUMNS = {
     "p_density", "Te_eV", "Ti_eV", "plasma_bounding",
     "b_method", "coil_current", "b_dia", "b_offset",
     "e_method", "e_charge", "e_dia", "e_offset",
-    "grid_L", "grid_N", "particles_per_cell",
+    "grid_L", "grid_N", "particles_per_cell", "symmetry",
+    "particle_mode", "n_test_particles",
     "solver_type", "solver_method", "cfl",
     "diag_period", "diag_path",
     "notes", "git_commit",
@@ -560,6 +568,9 @@ def _extract_from_python_snapshot(py_path):
         "e_offset":                  "e_offset",
         "L":                         "grid_L",
         "N":                         "grid_N",
+        "symmetry":                  "symmetry",
+        "particle_mode":             "particle_mode",
+        "n_test_particles":          "n_test_particles",
         "plasma_bounding":           "plasma_bounding",
         "number_per_cell_each_dim":  "particles_per_cell",
     }
@@ -647,6 +658,7 @@ def _print_runs(rows):
             f"b={r.get('b_method')} e={r.get('e_method')} "
             f"solver={r.get('solver_type')} "
             f"steps={r.get('max_steps')} N={r.get('grid_N')} L={r.get('grid_L')} "
+            f"sym={r.get('symmetry')} mode={r.get('particle_mode')} "
             f"  {r.get('run_dir')}"
         )
 

@@ -27,22 +27,30 @@ WarpX/
 │       └── *.h5
 │
 ├── src/                           # Python source package
+│   ├── domain.py                  # Domain dataclass + derive_domain + plasma_bounds (symmetry toggle)
+│   ├── spawn.py                   # make_layout (density vs count particle-mode toggle)
 │   ├── bext/
-│   │   ├── bext.py                # B-field HDF5 file generation
+│   │   ├── bext.py                # B-field HDF5 file generation (takes Domain)
+│   │   ├── analytic.py            # Elliptic-integral B-field kernel + parser strings
 │   │   └── make_collection.py     # magpylib coil geometry setup
 │   ├── eext/
-│   │   ├── eext.py                # E-field HDF5 file population
+│   │   ├── eext.py                # E-field HDF5 file population (takes Domain)
 │   │   └── methods.py             # Analytic E-field methods + EMethods enum
+│   ├── db/
+│   │   └── runs.py                # SQLite runs database + AST backfill
 │   ├── post/
 │   │   └── reader.py              # Post-processing placeholder (empty)
 │   └── utils/
 │       ├── cyl.py                 # Cartesian <-> Cylindrical coordinate conversion
-│       └── paths.py               # Centralised path constants (ROOT_DIR, BEXT_DIR)
+│       ├── config.py              # .env loader for storage backend
+│       ├── paths.py               # Centralised path constants (ROOT_DIR, BEXT_DIR)
+│       └── storage.py             # LocalBackend / DriveBackend abstraction
 │
 └── tests/                         # Jupyter notebooks for exploration
     ├── input_fields.ipynb
     ├── magpylib.ipynb
-    └── openPMD-viewer.ipynb
+    ├── openPMD-viewer.ipynb
+    └── coil_field_analysis/       # B-field validation notebooks + plots
 ```
 
 ---
@@ -89,6 +97,17 @@ are correct regardless of where scripts are invoked from.
 Two lightweight helper functions: `toCyl(xyz)` and `toCart(r, theta, z)`.
 Used by the E-field module to transform between coordinate systems when applying
 per-coil local frames.
+
+### `src/domain.py`
+`Domain` dataclass + `derive_domain(symmetry, L, N)` + `plasma_bounds(domain, plasma_bounding)`.
+The single source of truth for the simulated region: bounds, cell count, field BCs, particle BCs.
+Mode-specific differences (full vs octant) all flow out of `derive_domain` so downstream code never branches on `symmetry`. See [domain module](../modules/domain.md).
+
+### `src/spawn.py`
+`make_layout(mode, …)` dispatches between `picmi.GriddedLayout` (density mode) and `picmi.PseudoRandomLayout` (count mode). See [spawn module](../modules/spawn.md).
+
+### `src/db/runs.py`
+SQLite database at `output/runs.db` indexing every run with full parameter capture, status, git commit, and diagnostic path. Includes `_MIGRATIONS` for in-place column additions and `scan_existing()` for backfilling pre-DB runs.
 
 ### `output/bext/`
 Auto-generated at runtime. Stores cached HDF5 field files. File names encode all

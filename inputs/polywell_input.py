@@ -5,6 +5,8 @@ from src.bext.bext import setup_bext, make_bext_file
 from src.eext.eext import fill_eext_file # should run AFTER B-field init.
 from src.eext.methods import EMethods # enum registry for available methods
 from src.db.runs import RunsDB, new_run_dir
+from src.domain import derive_domain, plasma_bounds, VALID_SYMMETRIES
+from src.spawn import make_layout, VALID_PARTICLE_MODES
 import numpy as np
 import scipy.constants as sc
 
@@ -35,28 +37,40 @@ Te = 50e3 * sc.eV  # electron temperature: 50 keV (typical polywell target)
 Ti = 1e3  * sc.eV  # ion temperature: 1 keV (ions gain energy from potential well)
 
 # GRID #
-L = 2 # length of the simulation grid
-N = 72 # resolution of each grid axis. My system runs with 8 cores, so this must be divisible by 8
-number_per_cell_each_dim = [10, 10, 10] # number of macroparticles in each cell
+L = 2 # full-domain half-extent (box spans [-L, +L] in each direction)
+N = 72 # full-domain cell count per axis (must be divisible by MPI rank count)
+number_per_cell_each_dim = [10, 10, 10] # macroparticles per cell (density mode only)
+
+# SYMMETRY #
+symmetry = "full" # "full" or "octant". Octant simulates [0, +L]^3 with pmc+reflecting
+                  # on the inner faces; requires N even, and N/2 divisible by ranks.
+
+# PARTICLE SPAWNING #
+particle_mode = "density"   # "density": N_cells * ppc particles via GriddedLayout
+                            # "count":   exactly n_test_particles via PseudoRandomLayout
+n_test_particles = 10000    # used only when particle_mode == "count"
 
 # SCALE FACTORS #
 plasma_bounding = 0.11 # the % of the grid length plasma is allowed to start in
 
-## From user inputs, derive stuff
-lx = ly = lz = L
-nx = ny = nz = N
+## Validate toggles and derive the simulated-domain spec.
+## Everything downstream (grid, plasma bounds, field caches, runs DB) reads
+## from `domain`/`layout` rather than touching the toggles directly.
+assert symmetry in VALID_SYMMETRIES, f"Unknown symmetry mode '{symmetry}'"
+assert particle_mode in VALID_PARTICLE_MODES, f"Unknown particle_mode '{particle_mode}'"
+domain = derive_domain(symmetry, L, N)
 
 #################
 # === GRIDS === # (and solver)
 #################
 grid = picmi.Cartesian3DGrid(
-    number_of_cells=[nx, ny, nz],
-    lower_bound=[-lx, -ly, -lz],
-    upper_bound=[lx, ly, lz],
-    lower_boundary_conditions=["open", "open", "open"],
-    upper_boundary_conditions=["open", "open", "open"],
-    lower_boundary_conditions_particles=["absorbing", "absorbing", "absorbing"],
-    upper_boundary_conditions_particles=["absorbing", "absorbing", "absorbing"],
+    number_of_cells=list(domain.n_cells),
+    lower_bound=list(domain.lower),
+    upper_bound=list(domain.upper),
+    lower_boundary_conditions=list(domain.field_bc_lo),
+    upper_boundary_conditions=list(domain.field_bc_hi),
+    lower_boundary_conditions_particles=list(domain.particle_bc_lo),
+    upper_boundary_conditions_particles=list(domain.particle_bc_hi),
     warpx_max_grid_size=32,
 )
 
@@ -84,8 +98,7 @@ solver = picmi.ElectromagneticSolver(
 ve_rms = np.sqrt(Te / sc.m_e)
 vi_rms = np.sqrt(Ti / sc.m_p)
 
-plasma_bounds_lo = np.array([-lx, -ly, -lz]) * plasma_bounding
-plasma_bounds_hi = np.array([ lx,  ly,  lz]) * plasma_bounding
+plasma_bounds_lo, plasma_bounds_hi = plasma_bounds(domain, plasma_bounding)
 
 # Electrons: isotropic Maxwellian at Te, no net drift
 electron_distribution = picmi.UniformDistribution(
@@ -128,7 +141,7 @@ ext_path = setup_bext(
     particles=particles,
     warpx_module=warpx,
     I=I, dia=b_dia, offset=b_offset,
-    L=L, N=N,                          # only used by "file" method; ignored by "analytic"
+    domain=domain,                     # only used by "file" method; ignored by "analytic"
 )
 
 ## Configure E-field (file-based only for now)
@@ -141,15 +154,15 @@ if e_method is not None:
         particles.E_ext_particle_init_style = "read_from_file"
         ext_path = fill_eext_file(ext_path, method,
                                   e_dia, e_offset,
-                                  Q, L, N)
+                                  Q, domain)
         particles.read_fields_from_path = ext_path
     else:
         # Analytic B doesn't make an .h5. E-field needs its own file.
         particles.E_ext_particle_init_style = "read_from_file"
-        dummy_ext = make_bext_file(0, b_dia, b_offset, L, N)  # zero-current B file as scaffold
+        dummy_ext = make_bext_file(0, b_dia, b_offset, domain)  # zero-current B file as scaffold
         ext_path = fill_eext_file(dummy_ext, method,
                                   e_dia, e_offset,
-                                  Q, L, N)
+                                  Q, domain)
         particles.read_fields_from_path = ext_path
 
 ###############
@@ -163,23 +176,24 @@ sim = picmi.Simulation(
 
 )
 
-# add species to the simulation
-"""sim.add_species(
-    plasma_e,
-    layout=picmi.GriddedLayout(
-        grid=grid, n_macroparticle_per_cell=number_per_cell_each_dim,
-    ),
-)"""
-sim.add_species(
-    plasma_i,
-    layout=picmi.GriddedLayout(
-        grid=grid, n_macroparticle_per_cell=number_per_cell_each_dim,
-    ),
+layout = make_layout(
+    particle_mode,
+    grid=grid,
+    n_macroparticle_per_cell=number_per_cell_each_dim,
+    n_test_particles=n_test_particles,
 )
 
+# add species to the simulation
+"""sim.add_species(plasma_e, layout=layout)"""
+sim.add_species(plasma_i, layout=layout)
+
 # create, add tallies to the simulation
+# Field + particle diagnostics share `name="diag1"` so openPMD writes them
+# into a single series — each iteration file carries both `meshes/` (fields)
+# and `particles/` (species) groups, instead of producing two parallel
+# diags/field_diag/ and diags/part_diag/ folders.
 field_diag = picmi.FieldDiagnostic(
-    name="field_diag",
+    name="diag",
     grid=grid,
     period=10,
     data_list=["Bx", "By", "Bz",
@@ -193,7 +207,7 @@ field_diag.diag_type = "Full"
 field_diag.fields_to_plot = ['Bx', 'By', "Bz"]
 
 part_diag = picmi.ParticleDiagnostic(
-    name="part_diag",
+    name="diag1",
     period=10,
     species=[plasma_i],
     data_list=["x", "y", "z", "ux", "uy", "uz", "weighting"],
@@ -241,7 +255,10 @@ run_params = {
     # grid
     "grid_L":            L,
     "grid_N":            N,
+    "symmetry":          symmetry,
     "particles_per_cell": number_per_cell_each_dim,
+    "particle_mode":     particle_mode,
+    "n_test_particles":  n_test_particles,
     # solver
     "solver_type":       type(solver).__name__,
     "solver_method":     getattr(solver, "method", None),

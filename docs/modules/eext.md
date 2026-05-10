@@ -88,20 +88,19 @@ method = EMethods[e_method].value[0]    # callable function
 
 ## `eext.py`
 
-### `fill_eext_file(filepath, method, dia, offset, Q, L, N)` → `Path`
+### `fill_eext_file(filepath, method, dia, offset, Q, domain)` → `Path`
 
 **Main public function.** Computes the E-field grid and writes it into the HDF5 file
 that `make_bext_file` produced. Renames the file to include E-field parameters.
 
 ```
 Parameters:
-    filepath : str or Path — path to existing B-field .h5 file
-    method   : Callable    — one of the functions from methods.py
-    dia      : float       — ring diameter (m)
-    offset   : float       — ring center offset from origin (m)
-    Q        : float       — total charge per ring (C)
-    L        : int         — grid half-length (m)
-    N        : int         — grid resolution per axis
+    filepath : str or Path     — path to existing B-field .h5 file
+    method   : Callable        — one of the functions from methods.py
+    dia      : float           — ring diameter (m)
+    offset   : float           — ring center offset from origin (m)
+    Q        : float           — total charge per ring (C)
+    domain   : src.domain.Domain — simulated-domain spec
 
 Returns:
     pathlib.Path — path to the updated (and renamed) .h5 file
@@ -110,34 +109,36 @@ Returns:
 **Caching:** Before computing anything, constructs the expected output filename
 and returns immediately if it already exists:
 ```
-{original_stem}_E_ext_Q-{Q}_D-{dia}m_offset-{offset}m_C_L-{L}m_N-{N}.h5
+{original_stem}_E_ext_Q-{Q}_D-{dia}m_offset-{offset}m_C_L-{domain.L}m_N-{domain.N}.h5
 ```
 
+The E filename does not carry its own `_sym-…` token because the `{original_stem}` (from the B file) already encodes the symmetry. `domain.L` / `domain.N` are the user-facing full-domain values.
+
 **Pipeline when file does not exist:**
-1. Call `get_e_field_data(method, ...)` to compute `Ex, Ey, Ez`
-2. Call `_fill_efield_datasets(filepath, ...)` to write into the HDF5
+1. Call `get_e_field_data(method, ..., domain)` to compute `Ex, Ey, Ez`
+2. Call `_fill_efield_datasets(filepath, ..., grid_offset=domain.lower)` to write into the HDF5
 3. Rename the file to append E-field parameters to the name
 
 ---
 
-### `get_e_field_data(method, dia, offset, Q, L, N)` → `(Ex, Ey, Ez, grid_spacing)`
+### `get_e_field_data(method, dia, offset, Q, domain)` → `(Ex, Ey, Ez, grid_spacing)`
 
-Computes the full 3D E-field grid by iterating over every grid point and accumulating
-contributions from all 6 charged rings.
+Computes the 3D E-field grid by iterating over every grid point in the simulated domain and accumulating contributions from all 6 charged rings.
 
 ```
 Parameters:
-    method : Callable — analytic method (fw_e or bob_e)
-    dia    : float    — ring diameter (m)
-    offset : float    — ring center distance from origin (m)
-    Q      : float    — total charge per ring (C)
-    L      : int      — grid half-length (m)
-    N      : int      — grid resolution per axis
+    method : Callable          — analytic method (fw_e or bob_e)
+    dia    : float             — ring diameter (m)
+    offset : float             — ring center distance from origin (m)
+    Q      : float             — total charge per ring (C)
+    domain : src.domain.Domain — simulated-domain spec
 
 Returns:
-    Ex, Ey, Ez   : ndarray of shape (N, N, N) — E-field components (V/m)
+    Ex, Ey, Ez   : ndarray of shape domain.n_cells — E-field components (V/m)
     grid_spacing : list[float] — [dx, dy, dz]
 ```
+
+In octant mode this does (N/2)³ work instead of N³ — 8× faster naturally, with no special code path.
 
 **Per-point computation (inner loop):**
 
@@ -204,20 +205,20 @@ Accumulate into Ex[i,j,k], Ey[i,j,k], Ez[i,j,k]
 ## Data Flow Summary
 
 ```
-fill_eext_file(filepath, method, dia, offset, Q, L, N)
+fill_eext_file(filepath, method, dia, offset, Q, domain)
         │
         ├─ [renamed file exists?] ──yes──→ return cached path
         │
         └─ no
            │
-           ├─ get_e_field_data(method, dia, offset, Q, L, N)
+           ├─ get_e_field_data(method, dia, offset, Q, domain)
            │   │
            │   ├─ make_polywell_collection(Q, dia, offset)  [6 coils]
            │   │
-           │   └─ for each (i,j,k) in N×N×N, for each coil:
+           │   └─ for each (i,j,k) in domain.n_cells, for each coil:
            │       orient_point → toCyl → method → toCart → accumulate
            │
-           ├─ _fill_efield_datasets(filepath, Ex, Ey, Ez, ...)
+           ├─ _fill_efield_datasets(filepath, Ex, Ey, Ez, ..., grid_offset=domain.lower)
            │       → overwrites E datasets in existing .h5
            │
            └─ filepath.rename(new_filepath)

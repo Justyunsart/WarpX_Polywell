@@ -33,6 +33,8 @@ to simulate plasma confinement in a polywell magnetic configuration.
 ### Source Modules
 | Document | Description |
 |---|---|
+| [domain module](modules/domain.md) | `Domain` dataclass + symmetry reduction (full / octant) — single source of truth for the simulated region |
+| [spawn module](modules/spawn.md) | `make_layout` particle-mode selector — density vs exact count |
 | [bext module](modules/bext.md) | External B-field generation (`src/bext/`) — file-based and analytic modes |
 | [External Particle Field Modes](modules/external_particle_fields.md) | In-depth guide: physics, API reference, and how-to for both B-field pipelines |
 | [eext module](modules/eext.md) | External E-field grid generation (`src/eext/`) |
@@ -63,6 +65,10 @@ Subsequent runs with the same parameters reuse the cached file.
 ## Key Design Decisions
 
 - **Dual B-field modes**: The B-field can be supplied as a pre-computed grid file (`"file"` mode) or as exact analytic expressions evaluated per-particle (`"analytic"` mode). Set `b_method` in the input deck to switch. See [External Particle Field Modes](modules/external_particle_fields.md).
-- **Field caching**: In file mode, B and E fields are computed once, cached as `.h5` files, and reloaded on repeat runs. The file name encodes all parameters, acting as a cache key.
+- **Symmetry reduction**: `symmetry = "octant"` simulates one octant of the cubic polywell domain with PMC + reflecting BCs on the three inner faces — 8× cheaper, validated against a full-domain reference. See [domain module](modules/domain.md).
+- **Particle-mode toggle**: `particle_mode = "count"` swaps the default `GriddedLayout` for a `PseudoRandomLayout(n_macroparticles=…)`, giving exactly the requested macroparticle count globally — useful for tracer/orbit studies. See [spawn module](modules/spawn.md).
+- **Field caching**: In file mode, B and E fields are computed once, cached as `.h5` files, and reloaded on repeat runs. The file name encodes every parameter including the `symmetry` tag, so full/octant caches never collide.
+- **Combined diagnostic**: Field and particle diagnostics share `name="diag"`, producing a single openPMD series with `meshes/` and `particles/` groups per iteration.
 - **openPMD format**: All field files follow the openPMD 1.1.0 standard so they are compatible with WarpX's `read_from_file` interface and can be inspected with `openPMD-viewer`.
-- **Non-vectorized E-field**: The analytic E-field integration loops over every grid point. This is slow for large `N`; see [eext module](modules/eext.md) for details.
+- **Non-vectorized E-field**: The analytic E-field integration loops over every grid point. This is slow for large `N` (mitigated by octant mode, which does (N/2)³ work); see [eext module](modules/eext.md) for details.
+- **Runs database**: Every run is registered in `output/runs.db` with full parameter capture and queryable via `python -m src.db.runs list`.

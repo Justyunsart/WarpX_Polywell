@@ -2,6 +2,7 @@
 Functions to fill the external fields file with the E-field computed with parameters from the polywell input.
 """
 from src.bext.make_collection import make_polywell_collection # This is a convenient container for getting rotations
+from src.domain import Domain
 from magpylib.current import Circle
 from src.utils.cyl import toCyl, toCart
 from src.utils.storage import get_backend
@@ -10,12 +11,15 @@ import pathlib
 from typing import Callable
 import h5py
 
-def get_e_field_data(method:Callable, dia, offset, Q, L, N):
+def get_e_field_data(method:Callable, dia, offset, Q, domain: Domain):
     """
     Inputs define the grid parameters. Returns a corresponding grid with the same shape
     that represents the E-field values for those grid points.
     """
-    print(f"[get_e_field_data] Starting E-field computation: dia={dia}m, offset={offset}m, Q={Q}C, L={L}m, N={N}")
+    print(
+        f"[get_e_field_data] Starting E-field computation: dia={dia}m, offset={offset}m, "
+        f"Q={Q}C, domain={domain.symmetry} L={domain.L}m N={domain.N}"
+    )
 
     # Used BEFORE each call to the analytic method
     # BEFORE: orient_point() -> to_cyl() -> method
@@ -45,30 +49,33 @@ def get_e_field_data(method:Callable, dia, offset, Q, L, N):
     collection = make_polywell_collection(Q, dia, offset)
     print(f"[get_e_field_data] Polywell collection created with {len(list(collection))} coils")
 
-    # next, create the grid of points for the grid
-    _x = np.linspace(-L, L, N)
-    _y = np.linspace(-L, L, N)
-    _z = np.linspace(-L, L, N)
-    interval = _x[1] - _x[0]
-    grid_spacing = [interval, interval, interval]
-    X, Y, Z = np.meshgrid(_x, _y, _z, indexing='ij')  # (3, N, N, N)
+    # next, create the grid of points for the simulated domain
+    nx, ny, nz = domain.n_cells
+    _x = np.linspace(domain.lower[0], domain.upper[0], nx)
+    _y = np.linspace(domain.lower[1], domain.upper[1], ny)
+    _z = np.linspace(domain.lower[2], domain.upper[2], nz)
+    grid_spacing = [_x[1] - _x[0], _y[1] - _y[0], _z[1] - _z[0]]
+    X, Y, Z = np.meshgrid(_x, _y, _z, indexing='ij')  # (Nx, Ny, Nz)
     # Three SEPARATE arrays. Do not write `Ex = Ey = Ez = np.zeros(...)`:
     # that makes all three names alias the same buffer, so every +=
     # accumulates into a single array and Ex, Ey, Ez end up identical.
-    Ex = np.zeros((N, N, N))
-    Ey = np.zeros((N, N, N))
-    Ez = np.zeros((N, N, N))
-    print(f"[get_e_field_data] Grid created: {N}x{N}x{N} = {N**3} points, spacing={interval:.4f}m")
+    Ex = np.zeros((nx, ny, nz))
+    Ey = np.zeros((nx, ny, nz))
+    Ez = np.zeros((nx, ny, nz))
+    print(
+        f"[get_e_field_data] Grid created: {nx}x{ny}x{nz} = {nx*ny*nz} points, "
+        f"spacing=({grid_spacing[0]:.4f},{grid_spacing[1]:.4f},{grid_spacing[2]:.4f})m"
+    )
 
     # constants for all function calls
     a = dia/2
 
-    total_points = N ** 3
+    total_points = nx * ny * nz
     progress_interval = max(1, total_points // 10)
 
     # because the analytic methods aren't vectorized, we need to iterate over all points and accumulate.
     # from all coils' contributions.
-    for idx, (i, j, k) in enumerate(np.ndindex(N, N, N)):
+    for idx, (i, j, k) in enumerate(np.ndindex(nx, ny, nz)):
         if idx % progress_interval == 0:
             print(f"[get_e_field_data] Computing E-field: {idx}/{total_points} points ({100*idx//total_points}%) done")
 
@@ -141,7 +148,7 @@ def _fill_efield_datasets(filepath, Ex, Ey, Ez, grid_spacing, grid_offset):
     print(f"[_fill_efield_datasets] Finished writing E-field datasets to {filepath}")
 
 
-def fill_eext_file(filepath, method:Callable, dia, offset, Q, L, N):
+def fill_eext_file(filepath, method:Callable, dia, offset, Q, domain: Domain):
     """
     This function runs after the B-field external file functions are done.
     - Those functions make the .h5 file and also provides the filepath that this function needs
@@ -150,17 +157,22 @@ def fill_eext_file(filepath, method:Callable, dia, offset, Q, L, N):
     method: callable method for the analytic E-field
     dia: E-field ring diameter (m)
     Q: the current of the E-field rings (Coulombs)
-    L: grid length
-    N: number of grid points
+    domain: simulated-domain spec; the upstream B file already encodes the
+            symmetry tag in its stem, so this function's filename addition
+            does not need its own.
     """
-    print(f"[fill_eext_file] Starting E-field external file generation: dia={dia}m, offset={offset}m, "
-          f"Q={Q}C, L={L}m, N={N}")
+    print(
+        f"[fill_eext_file] Starting E-field external file generation: dia={dia}m, "
+        f"offset={offset}m, Q={Q}C, domain={domain.symmetry} L={domain.L}m N={domain.N}"
+    )
 
     backend = get_backend(subdir="bext")
 
     ## To even determine if the methods should be run, check if a file with the same name exists
         # the E-field parameters to append the filepath name with
-    filepath_addition = f"_E_ext_Q-{Q}_D-{dia}m_offset-{offset}m_C_L-{L}m_N-{N}.h5"
+    filepath_addition = (
+        f"_E_ext_Q-{Q}_D-{dia}m_offset-{offset}m_C_L-{domain.L}m_N-{domain.N}.h5"
+    )
         # derive the final file name from the input filepath stem
     filepath = pathlib.Path(filepath) # ensure pathlib can work with the input filepath
     new_name = filepath.stem + filepath_addition
@@ -176,12 +188,12 @@ def fill_eext_file(filepath, method:Callable, dia, offset, Q, L, N):
 
     ## First, get the data
     print(f"[fill_eext_file] Computing E-field data using method: {method.__name__}")
-    Ex, Ey, Ez, grid_spacing = get_e_field_data(method, dia, offset, Q, L, N)
+    Ex, Ey, Ez, grid_spacing = get_e_field_data(method, dia, offset, Q, domain)
 
     ## Next, fill the .h5 file with the data
         # note: the fill function used below uses a 'with open()' block, so
         # the file is guaranteed to be closed after this function call finishes.
-    grid_offset = (-L, -L, -L)
+    grid_offset = tuple(domain.lower)
     print(f"[fill_eext_file] Writing E-field data to file with grid_offset={grid_offset}")
     _fill_efield_datasets(filepath, Ex, Ey, Ez, grid_spacing, grid_offset)
 

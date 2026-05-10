@@ -101,6 +101,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers projection)
 from src.eext.eext import get_e_field_data
 from src.eext.methods import fw_e, bob_e
 from src.bext.make_collection import make_polywell_collection
+from src.domain import derive_domain
 
 PLOTS_DIR = NB_DIR / "plots"
 PLOTS_DIR.mkdir(exist_ok=True)
@@ -129,8 +130,9 @@ L = 0.6            # half-extent of the visualization cube [m]
 N = 25             # grid points per axis (N**3 total)
 
 print(f"Computing reference E-field with fw_e on a {N}x{N}x{N} grid...")
+domain = derive_domain("full", L, N)
 Ex, Ey, Ez, spacing = get_e_field_data(
-    method=fw_e, dia=DIA, offset=OFFSET, Q=Q, L=L, N=N)
+    method=fw_e, dia=DIA, offset=OFFSET, Q=Q, domain=domain)
 
 axis = np.linspace(-L, L, N)
 Emag = np.sqrt(Ex**2 + Ey**2 + Ez**2)
@@ -323,8 +325,9 @@ slice."""))
 
 cells.append(code(r'''N_cmp = 17
 print(f"Comparing fw_e vs bob_e on a {N_cmp}x{N_cmp}x{N_cmp} grid...")
-Ex_f, Ey_f, Ez_f, _ = get_e_field_data(method=fw_e,  dia=DIA, offset=OFFSET, Q=Q, L=L, N=N_cmp)
-Ex_b, Ey_b, Ez_b, _ = get_e_field_data(method=bob_e, dia=DIA, offset=OFFSET, Q=Q, L=L, N=N_cmp)
+domain_cmp = derive_domain("full", L, N_cmp)
+Ex_f, Ey_f, Ez_f, _ = get_e_field_data(method=fw_e,  dia=DIA, offset=OFFSET, Q=Q, domain=domain_cmp)
+Ex_b, Ey_b, Ez_b, _ = get_e_field_data(method=bob_e, dia=DIA, offset=OFFSET, Q=Q, domain=domain_cmp)
 
 axis_cmp = np.linspace(-L, L, N_cmp)
 mid_cmp = N_cmp // 2
@@ -387,11 +390,12 @@ peak. We use a coarse grid because we are only sampling along one line."""))
 
 cells.append(code(r'''offsets = [0.30, 0.40, 0.50, 0.65]
 N_sweep = 19  # coarse cube; we will only use the on-axis line
+domain_sweep = derive_domain("full", L, N_sweep)
 sweep_results = []
 for off in offsets:
     print(f"  computing offset = {off:.2f} m ...")
     ex, ey, ez, _ = get_e_field_data(
-        method=fw_e, dia=DIA, offset=off, Q=Q, L=L, N=N_sweep)
+        method=fw_e, dia=DIA, offset=off, Q=Q, domain=domain_sweep)
     em = np.sqrt(ex**2 + ey**2 + ez**2)
     sweep_results.append((off, em))
 
