@@ -51,7 +51,7 @@ particle_mode = "density"   # "density": N_cells * ppc particles via GriddedLayo
 n_test_particles = 10000    # used only when particle_mode == "count"
 
 # SCALE FACTORS #
-plasma_bounding = 0.11 # the % of the grid length plasma is allowed to start in
+plasma_bounding = 0.11 # plasma sphere radius as fraction of full-domain half-extent L
 
 ## Validate toggles and derive the simulated-domain spec.
 ## Everything downstream (grid, plasma bounds, field caches, runs DB) reads
@@ -100,17 +100,26 @@ vi_rms = np.sqrt(Ti / sc.m_p)
 
 plasma_bounds_lo, plasma_bounds_hi = plasma_bounds(domain, plasma_bounding)
 
+# Spatial profile: uniformly sampled sphere of radius `plasma_radius` centred at
+# the origin. AnalyticDistribution still samples within the bounding cube
+# (plasma_bounds_lo/hi); the step-function density makes particles outside the
+# sphere carry zero weight, so the realised macroparticle cloud is spherical.
+# In octant symmetry the cube is already clipped to [0,+R]^3, which gives the
+# +x/+y/+z octant of the same sphere.
+plasma_radius = plasma_bounding * L
+density_expr = f"if(x*x+y*y+z*z<{plasma_radius * plasma_radius}, {p_density}, 0.)"
+
 # Electrons: isotropic Maxwellian at Te, no net drift
-electron_distribution = picmi.UniformDistribution(
-    density=p_density,
+electron_distribution = picmi.AnalyticDistribution(
+    density_expression=density_expr,
     lower_bound=plasma_bounds_lo,
     upper_bound=plasma_bounds_hi,
     fill_in=True,
     rms_velocity=[ve_rms, ve_rms, ve_rms],
 )
 # Ions: isotropic Maxwellian at Ti (cooler; will be accelerated by potential well)
-ion_distribution = picmi.UniformDistribution(
-    density=p_density,
+ion_distribution = picmi.AnalyticDistribution(
+    density_expression=density_expr,
     lower_bound=plasma_bounds_lo,
     upper_bound=plasma_bounds_hi,
     fill_in=True,
