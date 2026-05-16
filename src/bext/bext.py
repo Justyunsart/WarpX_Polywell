@@ -21,7 +21,7 @@ from src.utils.storage import get_backend
 # ================================================================
 
 def setup_bext(method, particles, warpx_module=None, *,
-               I, dia, offset, domain: Domain = None):
+               I, dia, offset, domain: Domain = None, solver = None):
     """
     Configure WarpX's external B-field for particles.
 
@@ -47,7 +47,15 @@ def setup_bext(method, particles, warpx_module=None, *,
     """
     method = method.lower()
 
-    if method == "file":
+    # This resolves first to ensure the solver dictates where the field is applied
+    # Important since HybridPICSolver does not allow fields applied to particles
+    if solver == "hybrid":
+        if domain is None:
+            raise ValueError("'file' method requires L and N grid parameters.")
+        ext_path = make_bext_file(I, dia, offset, domain)
+        return ext_path
+
+    elif method == "file":
         if domain is None:
             raise ValueError("'file' method requires a domain parameter.")
         particles.B_ext_particle_init_style = "read_from_file"
