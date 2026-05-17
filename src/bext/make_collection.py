@@ -18,12 +18,12 @@ def make_polywell_collection(a, dia, d):
     d: distance from origin in cm
     """
     # current Loop creation, superimpose Loops and their fields
-    s1 = C(current=a, diameter=dia).move([-(d),0,0]).rotate_from_angax(90, [0, 1, 0])
-    s2 = C(current=-a, diameter=dia).move([(d),0,0]).rotate_from_angax(90, [0, 1, 0])
-    s3 = C(current=-a, diameter=dia).move([0,-(d),0]).rotate_from_angax(-90, [1, 0, 0])
-    s4 = C(current=a, diameter=dia).move([0,(d),0]).rotate_from_angax(-90, [1, 0, 0])
-    s5 = C(current=a, diameter=dia).move([0,0,-(d)]).rotate_from_angax(90, [0, 0, 1])
-    s6 = C(current=-a, diameter=dia).move([0,0,(d)]).rotate_from_angax(90, [0, 0, 1])
+    s1 = C(current=-a, diameter=dia).move([-(d),0,0]).rotate_from_angax(90, [0, 1, 0])
+    s2 = C(current=a, diameter=dia).move([(d),0,0]).rotate_from_angax(90, [0, 1, 0])
+    s3 = C(current=a, diameter=dia).move([0,-(d),0]).rotate_from_angax(90, [1, 0, 0])
+    s4 = C(current=-a, diameter=dia).move([0,(d),0]).rotate_from_angax(90, [1, 0, 0])
+    s5 = C(current=-a, diameter=dia).move([0,0,-(d)])
+    s6 = C(current=a, diameter=dia).move([0,0,(d)])
 
     c = Collection(s1,s2,s3,s4,s5,s6, style_color='black')
     return c

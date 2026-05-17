@@ -38,7 +38,8 @@ e_offset = 1.1 # m
 
     # Plasma temperatures #
 Te = 50e3 * sc.eV  # electron temperature: 50 keV (typical polywell target)
-Ti = 1e3  * sc.eV  # ion temperature: 1 keV (ions gain energy from potential well)
+#Ti = 1e3  * sc.eV  # ion temperature: 1 keV (ions gain energy from potential well)
+Ti = 1e4  * sc.eV
 
 # GRID #
 L = 2 # full-domain half-extent (box spans [-L, +L] in each direction)
@@ -54,10 +55,10 @@ particle_mode = "count"   # "density": N_cells * ppc particles via GriddedLayout
                             # "count":   n_test_particles_per_cell randomly per cell
                             #            (WarpX's AnalyticDistribution doesn't support
                             #            a global total with PseudoRandomLayout)
-n_test_particles_per_cell = 1   # used only when particle_mode == "count"
+n_test_particles_per_cell = 10   # used only when particle_mode == "count"
 
 # SCALE FACTORS #
-plasma_bounding = 0.11 # plasma sphere radius as fraction of full-domain half-extent L
+plasma_bounding = 0.25 # plasma sphere radius as fraction of full-domain half-extent L
 
 ## Validate toggles and derive the simulated-domain spec.
 ## Everything downstream (grid, plasma bounds, field caches, runs DB) reads
@@ -211,15 +212,19 @@ field_diag = picmi.FieldDiagnostic(
     name="diag",
     grid=grid,
     period=10,
+    # WarpX's FullDiagnostics::isFieldOutputType does NOT accept *_fp_external
+    # field names — those are internal MultiFab labels, not output types. To
+    # stream-trace the external fields in ParaView, open the pre-generated
+    # openPMD file at `output/bext/B_ext_…h5` as a separate source — it
+    # already contains B/x,y,z and E/x,y,z as proper vector records.
+    # In the current test-particle regime (do_not_deposit=1 on both species)
+    # no PIC self-field is generated, so the `B` written here is effectively
+    # equal to the external B anyway.
     data_list=["Bx", "By", "Bz",
-               "Bx_fp_external", "By_fp_external", "Bz_fp_external",
-               "Ex_fp_external", "Ey_fp_external", "Ez_fp_external",
                "Jx", "Jy", "Jz", "part_per_cell"],
     warpx_format='openpmd',  # Options: 'openpmd', 'plotfile', 'checkpoint'
     warpx_openpmd_backend='h5',  # For openPMD: 'h5', 'bp', or 'json'
 )
-field_diag.diag_type = "Full"
-field_diag.fields_to_plot = ['Bx', 'By', "Bz"]
 
 part_diag = picmi.ParticleDiagnostic(
     name="diag1",
@@ -290,6 +295,9 @@ try:
         print(f"[runs.db] registered run id={run_id} at {run_dir}")
         os.chdir(run_dir)
         try:
+            # Populate PICMI inputs (idempotent — sim.step() will skip the
+            # re-init via its self.inputs_initialized guard), then extend the
+            # WarpX-side fields_to_plot with names PICMI's parser dropped.
             sim.step()
         finally:
             os.chdir(_prev_cwd)

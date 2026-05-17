@@ -22,7 +22,8 @@ Usage
 
     # Or with the context manager (recommended):
     with RunsDB().run_context(run_dir, params) as run_id:
-        sim.step()     # status -> "completed" on success, "failed" on raise
+        sim.step()     # on success: status -> "completed".
+                       # on failure: DB row + run_dir are deleted, exception re-raised.
 
     # Querying:
     db = RunsDB()
@@ -36,6 +37,7 @@ Usage
 import ast
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 from contextlib import contextmanager
@@ -384,14 +386,18 @@ class RunsDB:
 
         On clean exit the status is set to "completed"; on any exception
         the row is deleted from the DB (along with its run_metadata.json
-        sidecar) and the exception is re-raised. The run directory itself
-        is preserved on disk for debugging.
+        sidecar) **and the run directory itself is removed** so failed
+        runs leave no trace under output/runs/. The exception is re-raised.
         """
         run_id = self.register_run(run_dir, params)
         try:
             yield run_id
         except BaseException:
             self.delete_run(run_id)
+            try:
+                shutil.rmtree(run_dir)
+            except FileNotFoundError:
+                pass
             raise
         else:
             self.update_status(run_id, "completed")
