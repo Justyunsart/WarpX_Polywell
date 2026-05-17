@@ -1,0 +1,19 @@
+[project]
+name = "warpx"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Justyunsart",email = "yunroh02@gmail.com"}
+]
+requires-python = ">=3.14"
+dependencies = [
+    "magpylib (>=5.2.3,<6.0.0)",
+    "h5py (>=3.16.0,<4.0.0)",
+    "numpy (>=2.4.5,<3.0.0)",
+    "scipy (>=1.17.1,<2.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
