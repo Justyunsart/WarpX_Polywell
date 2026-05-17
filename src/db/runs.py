@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS runs (
     particles_per_cell  TEXT,
     symmetry            TEXT    NOT NULL DEFAULT 'full',
     particle_mode       TEXT    NOT NULL DEFAULT 'density',
-    n_test_particles    INTEGER,
+    n_test_particles_per_cell INTEGER,
 
     -- solver
     solver_type         TEXT,
@@ -120,7 +120,13 @@ _INDEXES = [
 _MIGRATIONS: list[tuple[str, str]] = [
     ("symmetry", "TEXT NOT NULL DEFAULT 'full'"),
     ("particle_mode", "TEXT NOT NULL DEFAULT 'density'"),
-    ("n_test_particles", "INTEGER"),
+    ("n_test_particles_per_cell", "INTEGER"),
+]
+
+# Columns removed from the schema. Dropped via ALTER TABLE on existing DBs;
+# wrapped in try/except so a DB that never had the column is a no-op.
+_DELETIONS: list[str] = [
+    "n_test_particles",
 ]
 
 
@@ -144,6 +150,13 @@ class RunsDB:
             except sqlite3.OperationalError:
                 self.conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {ddl}")
                 self.conn.commit()
+        # Drop columns that have been retired from the schema.
+        for col in _DELETIONS:
+            try:
+                self.conn.execute(f"ALTER TABLE runs DROP COLUMN {col}")
+                self.conn.commit()
+            except sqlite3.OperationalError:
+                pass
         # Best-effort indexes: skip silently if a column is missing on an
         # older DB (migrations above should normally add it first).
         for ddl in _INDEXES:
@@ -231,6 +244,28 @@ class RunsDB:
         )
         self.conn.commit()
         self._refresh_sidecar(run_id)
+
+    def delete_run(self, run_id):
+        """Remove a run row and its run_metadata.json sidecar.
+
+        Used by run_context() to keep failed runs out of the DB. The run
+        directory itself is left intact so the input snapshot and any partial
+        diagnostics remain available for debugging.
+        """
+        row = self.conn.execute(
+            "SELECT run_dir FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            return
+        try:
+            rd = Path(row["run_dir"])
+            meta = rd / "run_metadata.json"
+            if meta.exists():
+                meta.unlink()
+        except Exception:
+            pass
+        self.conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+        self.conn.commit()
 
     def update_run(self, run_id, **fields):
         """Update arbitrary columns on a run row."""
@@ -348,13 +383,15 @@ class RunsDB:
         """Register a run, yield its id, auto-update status on exit.
 
         On clean exit the status is set to "completed"; on any exception
-        the status is set to "failed" and the exception is re-raised.
+        the row is deleted from the DB (along with its run_metadata.json
+        sidecar) and the exception is re-raised. The run directory itself
+        is preserved on disk for debugging.
         """
         run_id = self.register_run(run_dir, params)
         try:
             yield run_id
         except BaseException:
-            self.update_status(run_id, "failed")
+            self.delete_run(run_id)
             raise
         else:
             self.update_status(run_id, "completed")
@@ -474,7 +511,7 @@ _BACKFILL_COLUMNS = {
     "b_method", "coil_current", "b_dia", "b_offset",
     "e_method", "e_charge", "e_dia", "e_offset",
     "grid_L", "grid_N", "particles_per_cell", "symmetry",
-    "particle_mode", "n_test_particles",
+    "particle_mode", "n_test_particles_per_cell",
     "solver_type", "solver_method", "cfl",
     "diag_period", "diag_path",
     "notes", "git_commit",
@@ -570,7 +607,7 @@ def _extract_from_python_snapshot(py_path):
         "N":                         "grid_N",
         "symmetry":                  "symmetry",
         "particle_mode":             "particle_mode",
-        "n_test_particles":          "n_test_particles",
+        "n_test_particles_per_cell": "n_test_particles_per_cell",
         "plasma_bounding":           "plasma_bounding",
         "number_per_cell_each_dim":  "particles_per_cell",
     }

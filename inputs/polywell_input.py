@@ -1,6 +1,10 @@
 import os
 import shutil
 from pywarpx import picmi, warpx, particles
+
+# PICMI's BC_map has no entry for WarpX's native "pmc" boundary; register a
+# passthrough so octant-symmetry planes (tangential B = 0, normal E = 0) work.
+picmi.BC_map["pmc"] = "pmc"
 from src.bext.bext import setup_bext, make_bext_file
 from src.eext.eext import fill_eext_file # should run AFTER B-field init.
 from src.eext.methods import EMethods # enum registry for available methods
@@ -17,17 +21,17 @@ constants = picmi.constants
 # SIM #
 max_steps = 1000
 warpx.const_dt = 1e-9
-p_density = 1e12
+p_density = 1e18
 
     # B-Field # (polywell)
 b_method = "file" # "analytic" (parser expressions, no grid file) or "file" (magpylib -> HDF5 grid)
 I = 1e6 # current of coil, Amperes
 b_dia = 1 # diameter of coil, m
-b_offset = 1.1 # dist. of coil center from origin, m
+b_offset = 0.435 # dist. of coil center from origin, m
 
     # E-Field #
     # note: if e_method is set to None, all other E-field parameters will be ignored
-e_method = "FW" # either None (no E-field) or a name of an entry in EMethods (yes E-field)
+e_method = None # either None (no E-field) or a name of an entry in EMethods (yes E-field)
 Q = 1e-9 # Coulombs
 e_dia = 0.75 # m
 e_offset = 1.1 # m
@@ -38,17 +42,19 @@ Ti = 1e3  * sc.eV  # ion temperature: 1 keV (ions gain energy from potential wel
 
 # GRID #
 L = 2 # full-domain half-extent (box spans [-L, +L] in each direction)
-N = 72 # full-domain cell count per axis (must be divisible by MPI rank count)
+N = 80 # full-domain cell count per axis (must be divisible by MPI rank count)
 number_per_cell_each_dim = [10, 10, 10] # macroparticles per cell (density mode only)
 
 # SYMMETRY #
-symmetry = "full" # "full" or "octant". Octant simulates [0, +L]^3 with pmc+reflecting
+symmetry = "octant" # "full" or "octant". Octant simulates [0, +L]^3 with pmc+reflecting
                   # on the inner faces; requires N even, and N/2 divisible by ranks.
 
 # PARTICLE SPAWNING #
-particle_mode = "density"   # "density": N_cells * ppc particles via GriddedLayout
-                            # "count":   exactly n_test_particles via PseudoRandomLayout
-n_test_particles = 10000    # used only when particle_mode == "count"
+particle_mode = "count"   # "density": N_cells * ppc particles via GriddedLayout
+                            # "count":   n_test_particles_per_cell randomly per cell
+                            #            (WarpX's AnalyticDistribution doesn't support
+                            #            a global total with PseudoRandomLayout)
+n_test_particles_per_cell = 1   # used only when particle_mode == "count"
 
 # SCALE FACTORS #
 plasma_bounding = 0.11 # plasma sphere radius as fraction of full-domain half-extent L
@@ -189,7 +195,7 @@ layout = make_layout(
     particle_mode,
     grid=grid,
     n_macroparticle_per_cell=number_per_cell_each_dim,
-    n_test_particles=n_test_particles,
+    n_test_particles_per_cell=n_test_particles_per_cell,
 )
 
 # add species to the simulation
@@ -267,7 +273,7 @@ run_params = {
     "symmetry":          symmetry,
     "particles_per_cell": number_per_cell_each_dim,
     "particle_mode":     particle_mode,
-    "n_test_particles":  n_test_particles,
+    "n_test_particles_per_cell": n_test_particles_per_cell,
     # solver
     "solver_type":       type(solver).__name__,
     "solver_method":     getattr(solver, "method", None),
