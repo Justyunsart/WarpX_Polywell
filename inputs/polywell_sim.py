@@ -19,7 +19,7 @@ from src.eext.methods import EMethods # enum registry for available methods
 from src.db.runs import RunsDB, new_run_dir
 
 from configs.polywell_config import PolywellConfig, TEST_CONFIG, HYBRID_CONFIG
-from src.domain import derive_domain, plasma_bounds
+from src.domain import plasma_bounds
 from src.spawn import make_layout
 
 import numpy as np
@@ -50,20 +50,12 @@ M_E  = sc.m_e
 EV   = sc.eV
 MU0  = 4 * np.pi * 1e-7
 EPS0 = sc.epsilon_0
-simulation = picmi.Simulation(warpx_serialize_initial_conditions=True, verbose=True)
+simulation = picmi.Simulation(verbose=True)
 
 if test:
     cfg = TEST_CONFIG
 else:
     cfg = HYBRID_CONFIG
-
-domain = derive_domain(
-    cfg.symmetry,
-    cfg.L,
-    cfg.N
-)
-
-cfg.domain = domain
 
 class PollywellSixCoil: 
     def __init__(self, cfg: PolywellConfig, sim=None, test=True):
@@ -81,13 +73,21 @@ class PollywellSixCoil:
         self.define_run_management()
 
     def store_config_params(self, cfg):
+        # save config
         self.cfg = cfg
+        # denote testing or not
         self.test = test
+        # Hybrid vs EM
         self.solver_type = cfg.solver_type
+        # octant/full
         self.domain = cfg.domain
+        # density/count
         self.particle_mode = cfg.particle_mode
+        # if density mode
         self.p_density = cfg.p_density
-        self.plasma_count = cfg.plasma_count
+        # if count mode
+        self.n_test_particles_per_cell = cfg.n_test_particles_per_cell
+        # % volume of inner sphere initial particles occupy
         self.plasma_bounding=cfg.plasma_bounding
 
         self.Ti_eV = cfg.Ti_eV
@@ -102,15 +102,15 @@ class PollywellSixCoil:
         self.b_dia = cfg.b_dia
         self.b_offset = cfg.b_offset 
         self.I = cfg.I
-        # self.B_coil  = cfg.B_coil        # Tesla at coil center
-        # NOW CALCULATING B_COIL (@ center) FROM COIL CONFIG
-        MU0 = 4 * np.pi * 1e-7
-        self.B_coil = (MU0 * self.I) / self.b_dia      # field at coil center, Tesla
+        self.B_coil = cfg.B_coil
         # beta = n * kT * 2 * mu0 / B^2  (using ion temperature as proxy for total pressure)
         self.beta    = cfg.p_density * cfg.Ti_J * 2 * MU0 / cfg.B_coil**2
 
         print(f"\n{'='*60}")
-        print(f"  density = {cfg.p_density:.1e} m^-3")
+        if cfg.particle_mode == "density":
+            print(f"  density = {cfg.p_density:.1e} m^-3")
+        elif cfg.particle_mode == "count":
+            print(f"  n_test_particles_per_cell = {cfg.n_test_particles_per_cell}")
         print(f"  beta    = {cfg.beta:.3e}  {'(HIGH-BETA REGIME)' if (np.isclose([cfg.beta], [1.0], 0.1) or cfg.beta > 1.0) else '(low-beta)'}")
         print(f"{'='*60}\n")
 
@@ -118,11 +118,11 @@ class PollywellSixCoil:
         self.Te_eV = cfg.Te_eV
         self.Te_J  = cfg.Te_eV * EV
 
-        if self.test:
-            self.e_method = cfg.e_method
-            self.Q = cfg.Q 
-            self.e_dia = cfg.e_dia 
-            self.e_offset = cfg.e_offset
+        # E-field params
+        self.e_method = cfg.e_method
+        self.Q = cfg.Q 
+        self.e_dia = cfg.e_dia 
+        self.e_offset = cfg.e_offset
         
         # Cube side length
         self.L   = cfg.L        
@@ -131,17 +131,22 @@ class PollywellSixCoil:
         # Cell size in (m)
         self.dx  = cfg.dx
         # Number of particles per cell
-        self.n_per_cell = cfg.n_per_cell
+        self.n_per_cell_each_dim = cfg.n_per_cell_each_dim
 
-        print(f"[grid]  {cfg.N}^3 = {cfg.N**3:,} cells,  dx = {cfg.dx*1000:.0f} mm")
+        print(f"[grid] Values for symmetry: {self.cfg.symmetry}")
+        if self.cfg.symmetry == "full":
+            print(f"[grid]  {cfg.N}^3 = {cfg.N**3:,} cells,  dx = {cfg.dx*1000:.3f} mm")
+        else:
+            print(f"[grid]  {cfg.N/2}^3 = {(cfg.N/2)**3:,} cells,  dx = {cfg.dx*1000:.0f} mm")
         ion_gyroradius = np.sqrt(2*cfg.Ti_J*M_P)/(E_C*cfg.B_coil)
         print(f"[grid]  Ion gyroradius ~ {ion_gyroradius*1000:.1f} mm  "
             f"({(ion_gyroradius)/cfg.dx:.1f} cells per gyroradius)")
+
+        assert cfg.dx < ion_gyroradius, f"FAILED DUE TO DX{cfg.dx} > ION GYRORADIUS {ion_gyroradius}"
         
         # Plasma resistivity - used to dampen the mode excitation
         # Needed for HybridPICSolver
         self.eta = 1e-7
-
         
     def get_plasma_quantities(self):
 
@@ -191,58 +196,76 @@ class PollywellSixCoil:
         self.dt_ici   = self.T_ci / 10                # cyclotron: 10 steps per gyration minimum
 
     def get_sim_length(self):
+
+        # omega_pi constraint intentionally excluded — not applicable to hybrid PIC
+        self.dt = min(self.dt_icfl, self.dt_Acfl, self.dt_ici)
+
+        self.binding  = ("ion CFL"     if self.dt == self.dt_icfl else
+            "Alfvén CFL"  if self.dt == self.dt_Acfl  else
+            "ion cyclotron")
+        
+        print(f"\n[timestep]  dt_ion_CFL    = {self.dt_icfl:.3e} s")
+        print(f"[timestep]  dt_Alfven_CFL = {self.dt_Acfl:.3e} s")
+        print(f"[timestep]  dt_cyclotron  = {self.dt_ici:.3e} s")
+        print(f"[timestep]  --> const_dt  = {self.dt:.3e} s  (binding: {self.binding})")
+
+        steps_10bounce = int(10 * self.t_bounce / self.dt)
+        steps_10ci     = int(10 * self.T_ci     / self.dt)
+        self.max_steps      = max(steps_10bounce, steps_10ci)
+
+        print(f"\n[steps]  steps per bounce    = {int(self.t_bounce/self.dt):,}")
+        print(f"[steps]  steps per T_ci      = {int(self.T_ci/self.dt):,}")
+        print(f"[steps]  steps_10bounce      = {steps_10bounce:,}")
+        print(f"[steps]  steps_10ci          = {steps_10ci:,}")
+        print(f"[steps]  max_steps (binding) = {self.max_steps:,}  "
+            f"({'bounce' if steps_10bounce > steps_10ci else 'cyclotron'})")
+            
         if self.test:
             self.dt = 1e-9
             self.max_steps = 1000
+            print("********** OVER RIDING ABOVE BINDING FOR TEST MODE *********")
             print(f"[test mode] Using dt = {self.dt}"
                   f"[test mode] Max steps = {self.max_steps}"
                   )
-        else:
-            # omega_pi constraint intentionally excluded — not applicable to hybrid PIC
-            self.dt = min(self.dt_icfl, self.dt_Acfl, self.dt_ici)
-
-            self.binding  = ("ion CFL"     if self.dt == self.dt_icfl else
-                "Alfvén CFL"  if self.dt == self.dt_Acfl  else
-                "ion cyclotron")
+            print("********** OVER RIDING ABOVE BINDING FOR TEST MODE *********")
             
-            print(f"\n[timestep]  dt_ion_CFL    = {self.dt_icfl:.3e} s")
-            print(f"[timestep]  dt_Alfven_CFL = {self.dt_Acfl:.3e} s")
-            print(f"[timestep]  dt_cyclotron  = {self.dt_ici:.3e} s")
-            print(f"[timestep]  --> const_dt  = {self.dt:.3e} s  (binding: {self.binding})")
-
-            steps_10bounce = int(10 * self.t_bounce / self.dt)
-            steps_10ci     = int(10 * self.T_ci     / self.dt)
-            self.max_steps      = max(steps_10bounce, steps_10ci)
-
-            print(f"\n[steps]  steps per bounce    = {int(self.t_bounce/self.dt):,}")
-            print(f"[steps]  steps per T_ci      = {int(self.T_ci/self.dt):,}")
-            print(f"[steps]  steps_10bounce      = {steps_10bounce:,}")
-            print(f"[steps]  steps_10ci          = {steps_10ci:,}")
-            print(f"[steps]  max_steps (binding) = {self.max_steps:,}  "
-                f"({'bounce' if steps_10bounce > steps_10ci else 'cyclotron'})")
-            
+        # UPDATE SIMULATION PARAMETERS
         self.sim.time_step_size = self.dt
         self.sim.max_steps = self.max_steps
+
+        exit()
         
     def set_grid(self):
-        if self.test:
+        print(f"[INITIATING GRID WITH DOMAIN]")
+        print(f"SYMMETRY:{self.domain.symmetry}")
+        print(f"LOWER:{self.domain.lower}")
+        print(f"UPPER:{self.domain.upper}")
+        print(f"FIELD BC LO: {self.domain.field_bc_lo}")
+        print(f"FIELD BC HI: {self.domain.field_bc_hi}")
+        print(f"PARTICLE BC LO: {self.domain.particle_bc_lo}")
+        print(f"PARTICLE BC HI: {self.domain.particle_bc_hi}")
+        # Computer started yelling at me but neumann is equivalent to pmc by picmi docs
+        # https://warpx.readthedocs.io/en/latest/usage/parameters.html#boundary.field_lo-hi
+        pmc_needed = self.domain.field_bc_lo[0] == "pmc"
+        pmc_okay = "pmc" in picmi.BC_map
+        if self.solver_type == "EM":
             grid = picmi.Cartesian3DGrid(
-                number_of_cells=[self.N]*3,
-                lower_bound=[-self.L]*3,
-                upper_bound=[self.L]*3,
-                lower_boundary_conditions=["open", "open", "open"],
-                upper_boundary_conditions=["open", "open", "open"],
-                lower_boundary_conditions_particles=["absorbing", "absorbing", "absorbing"],
-                upper_boundary_conditions_particles=["absorbing", "absorbing", "absorbing"],
+                number_of_cells=list(self.domain.n_cells),
+                lower_bound=list(self.domain.lower),
+                upper_bound=list(self.domain.upper),
+                # if using pmc and pmc is allowed, okay, else use neumann
+                lower_boundary_conditions=list(self.domain.field_bc_lo) if (not pmc_needed or pmc_okay) else ('neumann', 'neumann', 'neumann'),
+                upper_boundary_conditions=list(self.domain.field_bc_hi),
+                lower_boundary_conditions_particles=list(self.domain.particle_bc_lo),
+                upper_boundary_conditions_particles=list(self.domain.particle_bc_hi),
                 warpx_max_grid_size=32,
             )
-        else:
+            print(f"FINISHED SETTING UP EM SOLVER GRID")
+        elif self.solver_type == "hybrid":
             grid = picmi.Cartesian3DGrid(
                 number_of_cells=[self.N]*3,
-
                 lower_bound=[-self.L]*3,
                 upper_bound=[self.L]*3,
-
                 # Field boundary conditions:
                 # I'm unsure how to set these, neumann works, open doesn't seem to work
                 # Otherwise it throws a fit
@@ -250,36 +273,30 @@ class PollywellSixCoil:
                 upper_boundary_conditions=["neumann"]*3,
                 lower_boundary_conditions_particles=["absorbing", "absorbing", "absorbing"],
                 upper_boundary_conditions_particles=["absorbing",  "absorbing",  "absorbing" ],
-
                 warpx_max_grid_size=self.N,   # single box (small grid, no need to decompose)                                                    
             )
+        print(grid.lower_boundary_conditions)
         self.grid = grid
         
     def set_b_field(self):
-        if self.test:
-            ## Configure B-field via the modular dispatcher
-            ext_path = setup_bext(
-                method='file',
-                particles=particles,
-                warpx_module=warpx,
-                I=self.I, dia=self.b_dia, offset=self.b_offset,
-                domain=self.domain                          # only used by "file" method; ignored by "analytic"
-            )
-        else:
-            ext_path = setup_bext(
-                method=self.b_method,
-                particles=None,
-                warpx_module=warpx,
-                I=self.I,
-                dia=self.b_dia,
-                offset=self.b_offset,
-                domain=self.domain,
-                solver=cfg.solver_type
-                )
+        print(f"CREATING B FIELD WITH SOLVER {self.solver_type} AND METHOD {self.b_method}")
+        ext_path = setup_bext(
+            method='file',
+            particles=particles,
+            warpx_module=warpx,
+            I=self.I,
+            dia=self.b_dia,
+            offset=self.b_offset,
+            domain=self.domain,
+            solver=self.solver_type
+        )
+        # hybrid needs grid fields, and not fields on particles
+        if self.solver_type == "hybrid":
             warpx.B_ext_grid_init_style = "read_from_file"
             warpx.read_fields_from_path = ext_path
         print(ext_path)
         self.ext_path = ext_path
+        # Field is div free, and for numerical stability, this is turned off
         warpx.do_initial_div_cleaning = 0
 
     def set_e_field(self):
@@ -307,14 +324,17 @@ class PollywellSixCoil:
 
     def set_solver(self):
 
-        if self.test:
+        print(f"SOLVER TYPE BEING SET AS: {self.solver_type}")
+
+        if self.solver_type == "EM":
             solver = picmi.ElectromagneticSolver(
                 grid=self.grid,
                 method="Yee",   # options: "Yee", "CKC", "psatd"
                 cfl=0.99,
             )
+            print("FINISHED SETTING UP EM SOLVER")
 
-        else:
+        elif self.solver_type == "hybrid":
             # TODO TODO ONLY DOES HYBRID AT THE MOMENT
             solver = picmi.HybridPICSolver(
                 grid=self.grid,
@@ -339,13 +359,25 @@ class PollywellSixCoil:
 
         In the hybrid PIC we don't have to worry about this either.
         """
+
+        # ALLOWS FOR COUNT VS DENSITY INPUTS
+        # picmi.GriddedLayout
+        layout = make_layout(
+            mode=self.particle_mode, 
+            grid=self.grid,
+            n_macroparticle_per_cell=self.n_per_cell_each_dim,
+            n_test_particles_per_cell=self.n_test_particles_per_cell
+        )
+
         plasma_bounds_lo, plasma_bounds_hi = plasma_bounds(self.domain, self.plasma_bounding)
         ve_rms = np.sqrt(self.Te_J / M_E)
         vi_rms = np.sqrt(self.Ti_J / M_P)
+        plasma_radius = self.plasma_bounding * self.L
+        density_expr = f"if(x*x+y*y+z*z<{plasma_radius * plasma_radius}, {self.p_density}, 0.)"
 
         # Ions: isotropic Maxwellian at Ti (cooler; will be accelerated by potential well)
-        ion_dist = picmi.UniformDistribution(
-            density=self.p_density,
+        ion_dist = picmi.AnalyticDistribution(
+            density_expression=density_expr,
             lower_bound=plasma_bounds_lo,
             upper_bound=plasma_bounds_hi,
             fill_in=True,
@@ -363,8 +395,8 @@ class PollywellSixCoil:
             # NOT USED
             # contains definition for electrons, but are not added to simulation
             # Electrons: isotropic Maxwellian at Te, no net drift
-            electron_dist = picmi.UniformDistribution(
-                density=self.p_density,
+            electron_dist = picmi.AnalyticDistribution(
+                density_expression=density_expr,
                 lower_bound=plasma_bounds_lo,
                 upper_bound=plasma_bounds_hi,
                 fill_in=True,
@@ -378,27 +410,12 @@ class PollywellSixCoil:
                 initial_distribution=electron_dist,
             )
 
-            plasma_e.do_not_deposit = 1
+            plasma_e.do_not_deposit = 1 # test particles
             plasma_i.do_not_deposit = 1 # test particles
 
-        # ALLOWS FOR COUNT VS DENSITY INPUTS
-
-        layout = make_layout(
-            mode=self.particle_mode, 
-            grid=self.grid,
-            n_macroparticle_per_cell=self.n_per_cell,
-            n_test_particles=self.plasma_count
-        )
-
+        # In test, particles don't influence field
+        # Ideally they would deposit charge and influence the field
         self.plasma_i = plasma_i
-        self.n_per_cell = self.n_per_cell
-        # self.sim.add_species(
-        #     plasma_i,
-        #     layout=picmi.GriddedLayout(
-        #         grid=self.grid,
-        #         n_macroparticle_per_cell=self.n_per_cell,
-        #     ),
-        # )
         self.sim.add_species(
             plasma_i,
             layout=layout,
@@ -494,7 +511,7 @@ class PollywellSixCoil:
             # grid
             "grid_L":               self.L,
             "grid_N":               self.N,
-            "particles_per_cell":   self.n_per_cell,
+            "particles_per_cell":   self.n_per_cell_each_dim,
             "solver_type":          type(self.solver).__name__,
             "solver_method":        getattr(self.solver, "method", None),
             # diagnostics
@@ -524,7 +541,7 @@ class PollywellSixCoil:
         finally:
             db.close()
 
-# python3.10 -u -m inputs.polywell_quadrant_input_verbose --density 5e21 >> ./output/hybrid_run_logs/"run_log_$(date +%s).txt" 2>&1
+# python3.10 -u -m inputs.polywell_sim --test >> ./output/hybrid_run_logs/"run_log_$(date +%s).txt" 2>&1
 
 polywell = PollywellSixCoil(cfg, sim=simulation, test=test)
 polywell.run()
