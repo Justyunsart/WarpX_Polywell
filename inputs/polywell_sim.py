@@ -92,8 +92,37 @@ class PollywellSixCoil:
 
         self.Ti_eV = cfg.Ti_eV
         self.Ti_J  = cfg.Ti_eV * EV
+
+        # Number of substeps used to update B, as of right now it is hardcoded. Maybe a mathematical expression to calculate this? Alfven waves?
+        # This is only relevant for HybridPIC
+        self.substeps = 40
+
+        # B field params
+        self.b_method = cfg.b_method
+        self.b_dia = cfg.b_dia
+        self.b_offset = cfg.b_offset 
+        self.I = cfg.I
+        # self.B_coil  = cfg.B_coil        # Tesla at coil center
+        # NOW CALCULATING B_COIL (@ center) FROM COIL CONFIG
+        MU0 = 4 * np.pi * 1e-7
+        self.B_coil = (MU0 * self.I) / self.b_dia      # field at coil center, Tesla
+        # beta = n * kT * 2 * mu0 / B^2  (using ion temperature as proxy for total pressure)
+        self.beta    = cfg.p_density * cfg.Ti_J * 2 * MU0 / cfg.B_coil**2
+
+        print(f"\n{'='*60}")
+        print(f"  density = {cfg.p_density:.1e} m^-3")
+        print(f"  beta    = {cfg.beta:.3e}  {'(HIGH-BETA REGIME)' if (np.isclose([cfg.beta], [1.0], 0.1) or cfg.beta > 1.0) else '(low-beta)'}")
+        print(f"{'='*60}\n")
+
+        # Electron/E-field parameters
         self.Te_eV = cfg.Te_eV
         self.Te_J  = cfg.Te_eV * EV
+
+        if self.test:
+            self.e_method = cfg.e_method
+            self.Q = cfg.Q 
+            self.e_dia = cfg.e_dia 
+            self.e_offset = cfg.e_offset
         
         # Cube side length
         self.L   = cfg.L        
@@ -110,30 +139,8 @@ class PollywellSixCoil:
             f"({(ion_gyroradius)/cfg.dx:.1f} cells per gyroradius)")
         
         # Plasma resistivity - used to dampen the mode excitation
+        # Needed for HybridPICSolver
         self.eta = 1e-7
-
-        if self.test:
-            self.e_method = cfg.e_method
-            self.Q = cfg.Q 
-            self.e_dia = cfg.e_dia 
-            self.e_offset = cfg.e_offset
-        # Number of substeps used to update B, as of right now it is hardcoded. Maybe a mathematical expression to calculate this? Alfven waves?
-        # This is only relevant for HybridPIC
-        self.substeps = 40
-
-        # B field params
-        self.B_coil  = cfg.B_coil        # Tesla at coil center
-        self.b_method = cfg.b_method
-        self.b_dia = cfg.b_dia
-        self.b_offset = cfg.b_offset 
-        self.I = cfg.I
-        # beta = n * kT * 2 * mu0 / B^2  (using ion temperature as proxy for total pressure)
-        self.beta    = cfg.p_density * cfg.Ti_J * 2 * MU0 / cfg.B_coil**2
-
-        print(f"\n{'='*60}")
-        print(f"  density = {cfg.p_density:.1e} m^-3")
-        print(f"  beta    = {cfg.beta:.3e}  {'(HIGH-BETA REGIME)' if (np.isclose([cfg.beta], [1.0], 0.1) or cfg.beta > 1.0) else '(low-beta)'}")
-        print(f"{'='*60}\n")
 
         
     def get_plasma_quantities(self):

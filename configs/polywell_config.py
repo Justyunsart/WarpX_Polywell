@@ -65,7 +65,6 @@ class PolywellConfig:
     n_per_cell:         list            = field(default_factory=lambda: [10, 10, 10])
 
     # B-field
-    B_coil:             float           = 10.0
     b_dia:              float           = 1.0
     b_offset:           float           = 1.1
     I:                  float           = 8e6
@@ -106,7 +105,6 @@ TEST_CONFIG = PolywellConfig(
     N               = 72,
     n_per_cell      = [10, 10, 10],
     # unused here since we use a test current I = 1e6 (needs to be 8e6 for 10T B-Field)
-    B_coil          = 10.0,
     b_dia           = 1.0,
     b_offset        = 1.1,
     I               = 1e6,
@@ -128,10 +126,9 @@ HYBRID_CONFIG = PolywellConfig(
     L               = 2.0,
     N               = 24,
     n_per_cell      = [10, 10, 10],
-    B_coil          = 10.0,
     b_dia           = 1.0,
     b_offset        = 1.1,
-    I               = 8e6,
+    I               = 1e6,
     b_method        = "file",
     e_method        = None,
     Q               = 0.0,
