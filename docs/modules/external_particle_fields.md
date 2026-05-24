@@ -13,6 +13,7 @@ and a practical guide for choosing and configuring each mode.
 2. [Physics Background](#2-physics-background)
 3. [Mode 1 — File-Based (`read_from_file`)](#3-mode-1--file-based-read_from_file)
 4. [Mode 2 — Analytic (`parse_B_ext_particle_function`)](#4-mode-2--analytic-parse_b_ext_particle_function)
+4.5. [Mode 3 — Potentials (Hybrid-PIC, `external_vector_potential`)](#45-mode-3--potentials-hybrid-pic-external_vector_potential)
 5. [API Reference](#5-api-reference)
 6. [User Guide — Choosing a Mode](#6-user-guide--choosing-a-mode)
 7. [Conventions and Pitfalls](#7-conventions-and-pitfalls)
@@ -21,22 +22,22 @@ and a practical guide for choosing and configuring each mode.
 
 ## 1. Overview
 
-WarpX supports two styles for applying an external B-field to particles at each
-time step:
+WarpX supports three styles for applying an external B-field. The first two
+apply B directly to particles each step; the third (Hybrid-PIC) feeds the
+**vector potential A** into the field solver, which curls it internally to
+produce the B used by Ohm's law.
 
-| Style | WarpX parameter value | How it works |
+| Style | WarpX parameter / namespace | How it works |
 |---|---|---|
-| **File-based** | `"read_from_file"` | Pre-compute B on a 3D grid, store in an openPMD HDF5 file. WarpX loads the grid at startup and interpolates to each particle position every step. |
-| **Analytic** | `"parse_B_ext_particle_function"` | Provide a math expression string for each of Bx, By, Bz as a function of `(x, y, z)`. WarpX evaluates the expression exactly at each particle position every step. No file, no interpolation. |
+| **File-based** | `particles.B_ext_particle_init_style = "read_from_file"` | Pre-compute B on a 3D grid, store in an openPMD HDF5 file. WarpX loads the grid at startup and interpolates to each particle position every step. |
+| **Analytic** | `particles.B_ext_particle_init_style = "parse_B_ext_particle_function"` | Provide a math expression string for each of Bx, By, Bz as a function of `(x, y, z)`. WarpX evaluates the expression exactly at each particle position every step. No file, no interpolation. |
+| **Potentials** (Hybrid-PIC only) | `external_vector_potential.<name>.read_from_file = 1` + `…path = <openPMD .h5>` | Pre-compute A on a 3D grid via Coulomb-gauge FFT curl-inverse of the magpylib B, store as a Wb/m `A` mesh in an openPMD file. WarpX's hybrid solver reads A and computes `B = ∇×A` internally each step. |
 
-Both styles are accessed through the same WarpX PICMI attribute:
-
-```python
-particles.B_ext_particle_init_style = "read_from_file"   # or
-particles.B_ext_particle_init_style = "parse_B_ext_particle_function"
-```
-
-The `setup_bext()` dispatcher in `src/bext/bext.py` handles all wiring automatically.
+The `setup_bext()` dispatcher in `src/bext/bext.py` handles all wiring
+automatically. For the potentials path it forces `use_potentials=True`
+whenever `solver="hybrid"` is passed (so the cache filename and the
+ParmParse keys stay consistent) and calls `_wire_hybrid_external_A` to
+populate the `hybrid_pic_model` and `external_vector_potential` Buckets.
 
 ---
 
@@ -279,6 +280,132 @@ particles.Bz_external_particle_function = exprs['Bz']
     │
     ▼
 WarpX evaluates expression at each particle's (x,y,z) every step
+```
+
+---
+
+## 4.5. Mode 3 — Potentials (Hybrid-PIC, `external_vector_potential`)
+
+The Hybrid-PIC solver in WarpX consumes the external magnetic field through
+a **vector potential A** rather than B directly. To run the polywell with
+hybrid PIC we therefore need an openPMD file that contains an `A` mesh in
+Wb/m, and we need the `external_vector_potential.<name>.read_from_file/path`
+ParmParse keys pointing WarpX at it.
+
+This mode is enabled by setting `use_hybrid = True` (or, equivalently,
+`use_potentials = True` plus `solver = "hybrid"`) in
+`inputs/polywell_input.py`. It's an **overlay on the file pipeline** — the
+same openPMD-file scaffolding from Mode 1 is reused, but the data path is
+"A first, then B = ∇×A" instead of "B straight from magpylib."
+
+### How It Works
+
+magpylib's API exposes `getB / getH / getJ / getM` but no `getA`. The
+cleanest way to recover A for an arbitrary coil arrangement is to invert
+the curl in Coulomb gauge, which in Fourier space is a one-liner:
+
+```
+∇·A = 0           ⇔   k · Ã(k) = 0          (Coulomb gauge)
+∇ × A = B         ⇒   Ã(k) = i (k × B̃(k)) / |k|²
+```
+
+with `Ã(0) = 0` chosen by gauge (corresponds to `A → 0 at infinity`).
+
+`np.fft.fftn` enforces periodic boundary conditions on the FFT box, so an
+isolated coil in a finite domain gets repeated into an infinite lattice of
+image coils. The cure is zero-padding: evaluate B on a box `pad_factor`×
+larger than the physics region (with `B = 0` in the pad region), invert in
+Fourier space, then crop back. Doubling `pad_factor` until A in the
+physics region stops moving gives a clean convergence test.
+
+`src/bext/vector_potential.py` implements all of this:
+
+| Function | Purpose |
+|---|---|
+| `compute_A_grid(collection, domain, pad_factor)` | One pad → magpylib `getB` → FFT curl-inverse → crop pass. |
+| `converge_A_grid(...)` | Doubles `pad_factor` (`2 → 4 → 8`) until A in the physics region is stable to `rtol`. Caps at `max_pad`. |
+| `curl_A(Ax, Ay, Az, spacing)` | `B = ∇×A` via central differences. Used both to derive B for the openPMD file and to verify against magpylib. |
+| `check_curl(...)` | Sanity-check helper that returns the relative L∞ error between `curl_A(A)` and magpylib's direct B. |
+
+### WarpX wiring (driven by `_wire_hybrid_external_A`)
+
+When `setup_bext` is called with `solver="hybrid"` it auto-flips
+`use_potentials = True` (logging a notice if it had been False) and calls
+`_wire_hybrid_external_A(ext_path)`, which drives the
+`pywarpx.hybridpicmodel` and `pywarpx.external_vector_potential` Buckets
+to set:
+
+```
+hybrid_pic_model.add_external_fields = 1
+external_vector_potential.fields = polywell
+external_vector_potential.do_diva_cleaning = 0
+external_vector_potential.polywell.read_from_file = 1
+external_vector_potential.polywell.path = <ext_path>
+external_vector_potential.polywell.A_time_external_grid_function(t) = 1
+```
+
+- `A_time_external_grid_function(t) = 1` keeps the field static.
+- `do_diva_cleaning = 0` because the FFT curl-inverse already enforces
+  `∇·A = 0` by construction — no extra cleaning needed.
+
+### Trade-offs
+
+| Property | Notes |
+|---|---|
+| **Required for Hybrid-PIC?** | Yes. The hybrid solver does not accept external `B_ext_particle_*` keys; A from `external_vector_potential` is the only path. |
+| **Per-step cost** | Same as Mode 1 — WarpX interpolates A once at startup; `B = ∇×A` is recomputed internally each step (cheap compared to the particle push). |
+| **Generation cost** | Higher than Mode 1: the FFT box is `(pad_factor·N)³`, so memory and FFT time scale with `pad³`. Production cap is `pad_factor = 8`. |
+| **Coulomb gauge** | Enforced spectrally by construction; verified at machine precision (~10⁻¹⁵) in the plasma cube by [`tests/test_vector_potential.py`](../../tests/test_vector_potential.py). |
+| **B reconstruction accuracy** | 99.1% of cells within 5% of peak \|B\| at N=32, monotonically improving with N. Coil-adjacent cells have unbounded L∞ error (1/r³ singularity — fundamental FD limit, not pipeline defect). |
+| **Cache filename** | Carries `_potentials` tag so caches from this mode never collide with magpylib-direct ones, even at identical parameters. |
+
+### E-field counterpart
+
+When `use_potentials` is True, `fill_eext_file` similarly switches to a
+**closed-form scalar potential φ** pipeline (`src/eext/potential.py`):
+`compute_phi_grid(Q, dia, offset, domain)` superposes
+`φ = Q·K(k) / (2π²ε₀√((a+ρ)² + z²))` from 6 polywell-arranged rings,
+vectorised over the whole grid, then `compute_E_from_phi(phi, dx)`
+returns `E = -∇φ`. Same physics as the per-point `methods.py::fw_e/bob_e`
+loop, ~100× faster at N = 64.
+
+### Data Flow
+
+```
+b_method = "file" + use_hybrid = True  (i.e., use_potentials = True, solver = "hybrid")
+                            │
+                            ▼
+setup_bext("file", ..., solver="hybrid", use_potentials=True)
+                            │
+                            ▼
+make_bext_file(I, dia, offset, domain, use_potentials=True)
+                            │
+                            ▼
+_compute_b_via_potentials(I, dia, offset, domain)
+            │
+            ├─ make_polywell_collection(I, dia, offset)
+            │
+            ├─ converge_A_grid(collection, domain)
+            │     │  pad=2 → 4 → 8 (until rel-change < rtol)
+            │     │
+            │     └─ per pad:
+            │         _padded_grid → magpylib.getB → _coulomb_gauge_A_from_B → crop
+            │             → Ax, Ay, Az on physics grid
+            │
+            └─ curl_A(Ax, Ay, Az, spacing)
+                  → Bx, By, Bz on physics grid (∇×A central differences)
+                            │
+                            ▼
+_make_empty_ext_h5(file_path)    [creates B, E, A mesh groups]
+_fill_h5_file(..., Ax=Ax, Ay=Ay, Az=Az)
+            → openPMD .h5 with populated B and A meshes
+                            │
+                            ▼
+_wire_hybrid_external_A(ext_path)
+            → ParmParse keys set on pywarpx Buckets
+                            │
+                            ▼
+WarpX hybrid solver reads A from ext_path, curls it internally each step
 ```
 
 ---

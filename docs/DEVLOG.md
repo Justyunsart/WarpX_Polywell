@@ -7,6 +7,148 @@ entry — `git log` already covers those.
 
 ---
 
+## 2026-05-23 — Vector-potential pipeline for Hybrid-PIC; A from B via FFT curl-inverse
+
+### What changed
+
+- **New module [`src/bext/vector_potential.py`](../src/bext/vector_potential.py).**
+  Computes the vector potential A on the WarpX grid from any
+  magpylib-evaluable B. Coulomb-gauge FFT curl-inverse on a zero-padded
+  box: `Ã(k) = i (k × B̃) / |k|²` with the DC mode zeroed.
+  `compute_A_grid(collection, domain, pad_factor)` does one pad/FFT/crop
+  pass; `converge_A_grid(...)` doubles `pad_factor` (2 → 4 → 8) until A in
+  the physics region stops moving by more than `rtol`. `curl_A` and
+  `check_curl` are reusable helpers for `B = ∇×A` and verification.
+- **New module [`src/eext/potential.py`](../src/eext/potential.py).**
+  Closed-form scalar potential φ for a charged ring (elliptic integrals;
+  `φ = Q·K(k) / (2π²ε₀√((a+ρ)² + z²))`). Reuses
+  `make_polywell_collection` for the 6 ring placements/orientations and is
+  vectorised over the whole grid — typically ~100× faster than the
+  per-point `methods.py::fw_e`/`bob_e` loops it can replace.
+  `compute_E_from_phi` returns `E = -∇φ`.
+- **`use_potentials` parameter threaded through the B and E pipelines.**
+  `setup_bext`, `make_bext_file`, `get_bext_file_name`, and `fill_eext_file`
+  all take `use_potentials: bool = False`. When True:
+  * B file built via FFT curl-inverse → ∇×A (writes both A and B to the
+    `.h5`); E file built via φ → -∇φ.
+  * Filenames carry a `_potentials` tag (`B_ext_potentials_…h5`,
+    `_E_ext_potentials_…`) so cache files never collide with the
+    magpylib-direct / analytic-E pipeline outputs.
+- **openPMD file now optionally carries an `A` mesh.**
+  `_make_empty_ext_h5` creates a third mesh group `A` (alongside `B` and
+  `E`) with `unitDimension = [1, 1, -2, -1, 0, 0, 0]` (Wb/m). `_fill_h5_file`
+  writes the `A/x,y,z` datasets when `use_potentials=True`. When False the
+  group exists but is empty — backward-compatible with downstream readers.
+- **Hybrid-PIC wiring in `setup_bext`.**
+  When `solver="hybrid"` the dispatcher forces `use_potentials=True` (with
+  a printed notice if it had been False) and calls new helper
+  `_wire_hybrid_external_A(ext_path)`, which drives `pywarpx.hybridpicmodel`
+  and `pywarpx.external_vector_potential` Buckets to set:
+  ```
+  hybrid_pic_model.add_external_fields = 1
+  external_vector_potential.fields = polywell
+  external_vector_potential.do_diva_cleaning = 0
+  external_vector_potential.polywell.read_from_file = 1
+  external_vector_potential.polywell.path = <ext_path>
+  external_vector_potential.polywell.A_time_external_grid_function(t) = 1
+  ```
+  WarpX then reads A from the openPMD file at startup and curls it
+  internally each step.
+- **Single user toggle `use_hybrid` in
+  [`inputs/polywell_input.py`](../inputs/polywell_input.py).**
+  Replaces the previous `use_potentials` toggle. Drives three things in
+  lockstep: (a) solver class (`HybridPICSolver` vs `ElectromagneticSolver`),
+  (b) `use_potentials = use_hybrid` (derived), (c) the `solver="hybrid"`
+  kwarg passed through to `setup_bext`. The two-line edit users actually
+  flip.
+- **Filterable `use_hybrid` column in `runs.db`.**
+  Wired through the six places `scripts.md` flags: `_SCHEMA`, `_MIGRATIONS`,
+  `_INDEXES`, `list_runs(use_hybrid=…)` (accepts truthy CLI strings),
+  `_BACKFILL_COLUMNS`, and `SCALAR_MAP`. `_print_runs` now shows
+  `hybrid=Y/N` per row. Migration applies on next DB open (verified live).
+- **New test suite [`tests/test_vector_potential.py`](../tests/test_vector_potential.py).**
+  5 tests, 8 sub-assertions — all passing:
+  1. Padding convergence: doubling `pad_factor` moves |A| by < 0.1%.
+  2. ∇×A vs magpylib B: 99.1% of cells within 5% of peak |B|, 97% within 1%.
+  3. Coulomb gauge: `‖∇·A‖ / max‖∇×A‖ = 9×10⁻¹⁶` in the plasma cube
+     (machine precision).
+  4. Resolution convergence: cells-within-5%-of-peak grows monotonically
+     97.3 → 98.8 → 99.1 → 99.5 % as N = 16 → 48.
+  5. Single isolated ring vs analytic `A_φ` (elliptic integrals): 14% rel
+     err off-ring.
+
+### Why
+
+WarpX's hybrid-PIC solver consumes the external magnetic field through a
+vector potential A, not B directly. To run the polywell with hybrid PIC we
+needed (a) A on a grid in Wb/m, (b) written into an openPMD `A` mesh, and
+(c) the `external_vector_potential.<name>.read_from_file/path` ParmParse
+keys pointing WarpX at the file.
+
+magpylib only exposes `getB`/`getH`/`getJ`/`getM` — no `getA`. The cleanest
+way to recover A for an arbitrary coil arrangement is to start from B
+(which magpylib does have) and invert the curl in Coulomb gauge. In
+Fourier space this is the one-liner above, which is just vector Poisson
+per Cartesian component. The padding is the cost: `np.fft.fftn` is
+periodic, so an isolated coil in a finite box gets repeated as an infinite
+lattice and image contamination leaks into the interior. Zero-padding the
+box buries the images far enough away that they cancel out, and doubling
+the padding gives a clean convergence test.
+
+The E-field side was a free win: the existing per-point loop in
+`get_e_field_data` was the bottleneck for large N (O(N³ × 6) Python calls
+to `fw_e`/`bob_e`). The same physics expressed as a vectorised
+elliptic-integral sum over 6 rotated rings runs in one shot — useful even
+without `use_hybrid` if you want to swap the analytic-E pipeline for the
+potential-derived one.
+
+### Gotchas / follow-ups
+
+- **Don't gate on per-cell relative error for the polywell.** It has a
+  magnetic null at origin by design, so |B| → 0 in the interior. Any
+  per-cell `|a - b| / |b|` blows up to ∞ in the null even when the
+  absolute error is tiny. The test suite uses **peak-normalised absolute
+  tolerance** (fraction of cells where `|error| < 5% of peak |B|`), which
+  matches what a hybrid-PIC particle in the null actually experiences.
+- **L∞ at coil-adjacent cells is unbounded by construction.** Central
+  differences of a 1/r³ singular source can't reproduce the source.
+  ~1% of cells (the ones touching a coil ring) will always show large L∞
+  error — this is a fundamental FD limit, not a pipeline defect, and
+  WarpX's own Yee-mesh curl has the same property.
+- **Coulomb gauge is at machine precision in the interior.** Test 3
+  reports `9×10⁻¹⁶` in the plasma cube. The spectral `ik·Ã = 0`
+  enforcement survives IFFT and cropping intact. The full-grid div/curl
+  ratio is non-zero (~15%) but it's the same coil-cell FD-truncation
+  artefact as Test 2 — diagnostic only.
+- **Production `pad_factor = 8` is enough.** Test 1 shows the rel change
+  from pad=4 to pad=8 is < 0.1%. Going to pad=16 doubles every FFT axis
+  again — memory scales as `(pad·N)³ × 16 B` per complex array, so the
+  jump from 8 to 16 is the difference between fitting in RAM and an OOM
+  SIGKILL.
+- **The B mesh in a `_potentials`-tagged file is unused by the hybrid
+  solver.** WarpX reads A from `external_vector_potential.polywell.path`
+  only. The derived B (∇×A via central differences) is written to the
+  same file as a debugging convenience and so non-hybrid runs that happen
+  to find the cache still see what they expect.
+- **pywarpx Bucket idiom for ParmParse sub-keys.** `external_vector_potential`
+  is a top-level Bucket, but per-field keys like
+  `external_vector_potential.polywell.path` aren't legal Python attribute
+  names — use `setattr(external_vector_potential, "polywell.path", value)`.
+  Same convention `bext.py::setup_bext` already uses for
+  `particles.Bx_external_particle_function(x,y,z,t)`.
+
+### Running the test suite
+
+```bash
+PYTHONPATH=$(pwd) python tests/test_vector_potential.py
+```
+
+Exits 0 on full pass, 1 on any failure. ~30 s on a laptop at the default
+parameters (memory budget capped at ~1 GB via `gc.collect()` between
+tests and small `pad·N`).
+
+---
+
 ## 2026-05-17 — External-field ParaView workflow; SIGABRT edge case
 
 ### What changed

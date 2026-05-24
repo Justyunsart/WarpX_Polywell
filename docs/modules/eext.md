@@ -12,6 +12,7 @@ placeholder that `bext.py` left behind.
 |---|---|
 | `src/eext/eext.py` | Grid computation and HDF5 population |
 | `src/eext/methods.py` | Analytic E-field integrands + `EMethods` enum |
+| `src/eext/potential.py` | Closed-form ring scalar potential φ (elliptic integrals); fully vectorised — typically ~100× faster than the per-point `methods.py` loop for the same physics |
 
 ---
 
@@ -88,34 +89,54 @@ method = EMethods[e_method].value[0]    # callable function
 
 ## `eext.py`
 
-### `fill_eext_file(filepath, method, dia, offset, Q, domain)` → `Path`
+### `fill_eext_file(filepath, method, dia, offset, Q, domain, use_potentials=False)` → `Path`
 
 **Main public function.** Computes the E-field grid and writes it into the HDF5 file
 that `make_bext_file` produced. Renames the file to include E-field parameters.
 
 ```
 Parameters:
-    filepath : str or Path     — path to existing B-field .h5 file
-    method   : Callable        — one of the functions from methods.py
-    dia      : float           — ring diameter (m)
-    offset   : float           — ring center offset from origin (m)
-    Q        : float           — total charge per ring (C)
-    domain   : src.domain.Domain — simulated-domain spec
+    filepath       : str or Path       — path to existing B-field .h5 file
+    method         : Callable          — one of the functions from methods.py.
+                                          Ignored when use_potentials=True
+                                          (the φ → -∇φ pipeline takes over).
+    dia            : float             — ring diameter (m)
+    offset         : float             — ring center offset from origin (m)
+    Q              : float             — total charge per ring (C)
+    domain         : src.domain.Domain — simulated-domain spec
+    use_potentials : bool              — if True, build E by summing the
+                                          closed-form ring potential φ from
+                                          src.eext.potential.compute_phi_grid
+                                          over 6 polywell rings and taking
+                                          E = -∇φ. The appended filename
+                                          segment carries a `_potentials` tag.
 
 Returns:
     pathlib.Path — path to the updated (and renamed) .h5 file
 ```
 
 **Caching:** Before computing anything, constructs the expected output filename
-and returns immediately if it already exists:
+and returns immediately if it already exists. The appended segment depends on
+`use_potentials`:
+
 ```
+# use_potentials=False (default)
 {original_stem}_E_ext_Q-{Q}_D-{dia}m_offset-{offset}m_C_L-{domain.L}m_N-{domain.N}.h5
+
+# use_potentials=True
+{original_stem}_E_ext_potentials_Q-{Q}_D-{dia}m_offset-{offset}m_C_L-{domain.L}m_N-{domain.N}.h5
 ```
 
-The E filename does not carry its own `_sym-…` token because the `{original_stem}` (from the B file) already encodes the symmetry. `domain.L` / `domain.N` are the user-facing full-domain values.
+The E filename does not carry its own `_sym-…` token because the
+`{original_stem}` (from the B file) already encodes the symmetry. The
+`_potentials` tag prevents collision between the analytic-E and
+`φ → -∇φ` caches.
 
 **Pipeline when file does not exist:**
-1. Call `get_e_field_data(method, ..., domain)` to compute `Ex, Ey, Ez`
+1. If `use_potentials=False`: call `get_e_field_data(method, ..., domain)` —
+   per-point loop over `methods.py::fw_e`/`bob_e`. Else: call
+   `_get_e_field_data_via_potentials(dia, offset, Q, domain)` — vectorised
+   `compute_phi_grid` followed by `compute_E_from_phi`.
 2. Call `_fill_efield_datasets(filepath, ..., grid_offset=domain.lower)` to write into the HDF5
 3. Rename the file to append E-field parameters to the name
 
@@ -225,3 +246,62 @@ fill_eext_file(filepath, method, dia, offset, Q, domain)
                    → encodes E-field params in filename
                    → return new_filepath
 ```
+
+---
+
+## `potential.py`
+
+Closed-form **scalar potential φ** from 6 polywell-arranged charged rings,
+fully vectorised over the WarpX grid. When `fill_eext_file(...,
+use_potentials=True)` is invoked, this module replaces the per-point
+`methods.py` loop entirely.
+
+### Physics
+
+For a single charged ring of radius `a` carrying total charge `Q`, in its
+local cylindrical frame:
+
+```
+k² = 4 a ρ / [(a + ρ)² + z²]
+φ(ρ, z) = Q · K(k) / (2 π² ε₀ √((a + ρ)² + z²))
+```
+
+where `K(k)` is the complete elliptic integral of the first kind
+(`scipy.special.ellipk(m)` with `m = k²`). On-axis (`ρ → 0`) this collapses
+to the familiar `Q / (4πε₀ √(a² + z²))`.
+
+### `phi_ring_local(rho, z, a, Q)` → ndarray
+
+Vectorised single-ring φ in the ring's local cylindrical coordinates.
+`rho` and `z` can be arrays of any matching shape.
+
+### `compute_phi_grid(Q, dia, offset, domain)` → `(phi, (dx, dy, dz))`
+
+Superposes φ from 6 polywell-placed rings on the WarpX grid:
+
+1. Builds the magpylib `Collection` via `make_polywell_collection(Q, dia, offset)`
+   — used only for the ring positions and orientations (same convention as
+   the existing `get_e_field_data` in `eext.py`; the per-coil charge magnitude
+   carried by the Collection is ignored and `+Q` is applied uniformly).
+2. For each ring, transforms all grid points into the ring's local frame
+   via `c.orientation.inv().apply(pts_lab - c.position)`.
+3. Accumulates `phi_ring_local(ρ, z, a, Q)` into a flat array.
+4. Reshapes back to `(nx, ny, nz)` and returns alongside the grid spacing.
+
+The vectorisation is per-ring rather than per-point: each ring iteration
+evaluates φ at *all* grid points at once via NumPy + `scipy.special.ellipk`.
+
+### `compute_E_from_phi(phi, spacing)` → `(Ex, Ey, Ez)`
+
+`E = -∇φ` via second-order central differences (`np.gradient`).
+
+### Why bother
+
+The existing `get_e_field_data` loops over grid points and over coils in
+Python — `O(N³ × 6)` `fw_e`/`bob_e` calls. For `N = 64`, that's ~1.6M
+function calls and dominates the field-cache build time. The potentials
+pipeline expresses the same physics (sum of 6 oriented-ring fields) as
+vectorised numpy and is typically ~100× faster at `N = 64` — and the
+speedup grows with N.
+
+---

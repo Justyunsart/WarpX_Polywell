@@ -103,24 +103,49 @@ Two modes selectable via `particle_mode`. Both spawn particles from the same `Un
 
 ---
 
+## Solver / Potentials Toggle
+
+A single user toggle, `use_hybrid`, picks the solver class **and** flips
+the B/E field pipelines into "potentials mode" in lockstep. Hybrid-PIC is
+the only WarpX solver that natively consumes an external vector potential
+A (rather than B directly), so the two settings have to move together.
+
+| Parameter | Default | Type | Description |
+|---|---|---|---|
+| `use_hybrid` | `False` | `bool` | When True: solver is `HybridPICSolver`, the B file is built via Coulomb-gauge FFT curl-inverse for A (`src.bext.vector_potential`) and the openPMD `A` mesh is wired into `external_vector_potential.polywell.{read_from_file, path}`. When False: solver is `ElectromagneticSolver(Yee)`, B comes straight from magpylib, E comes from the analytic ring integrand. |
+| `use_potentials` | derived from `use_hybrid` | `bool` | Don't set this by hand. It exists so `setup_bext` / `fill_eext_file` can be driven without solver coupling, but in `polywell_input.py` it's just `use_potentials = use_hybrid`. |
+
+> **Cache safety.** With `use_hybrid=True` the generated `.h5` filenames
+> carry a `_potentials` tag (e.g. `B_ext_potentials_…h5`,
+> `…_E_ext_potentials_…h5`) so caches from the two pipelines never
+> collide, even at otherwise identical parameters.
+
+> **DB column.** `use_hybrid` is a filterable column in `runs.db`. List
+> hybrid-mode runs with
+> `python -m src.db.runs list use_hybrid=true`.
+
+---
+
 ## Solver Options
 
-The solver is configured in the `=== GRIDS ===` section:
+The solver is selected in the `=== GRIDS ===` section, branching on the
+`use_hybrid` toggle above:
 
 ```python
-# Currently active:
-solver = picmi.ElectromagneticSolver(grid=grid, method="Yee", cfl=0.99)
-
-# Available alternatives (commented out):
-# solver = picmi.ElectrostaticSolver(grid=grid)
-# solver = picmi.HybridPICSolver(...)
+if use_hybrid:
+    solver = picmi.HybridPICSolver(
+        grid=grid, Te=1.0, n0=p_density, gamma=1,
+        plasma_resistivity=0, n_floor=(p_density * plasma_bounding),
+    )
+else:
+    solver = picmi.ElectromagneticSolver(grid=grid, method="Yee", cfl=0.99)
 ```
 
-| Solver | Notes |
-|---|---|
-| `ElectromagneticSolver` (Yee) | Full Maxwell; supports external E-field from file |
-| `ElectrostaticSolver` | Poisson-based; simpler but no EM waves |
-| `HybridPICSolver` | Does **not** support external E-fields from file; requires external vector potentials instead |
+| Solver | When chosen | Notes |
+|---|---|---|
+| `ElectromagneticSolver` (Yee) | `use_hybrid=False` | Full Maxwell; supports external E-field from file |
+| `HybridPICSolver` | `use_hybrid=True` | Consumes external B-field as a vector potential A from the openPMD file via `external_vector_potential.polywell.{read_from_file, path}`. Does **not** support external E-fields applied to particles. |
+| `ElectrostaticSolver` | (commented out) | Poisson-based; simpler but no EM waves |
 
 ---
 
