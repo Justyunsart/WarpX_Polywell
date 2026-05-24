@@ -5,6 +5,7 @@
       <sourceFolder url="file://$MODULE_DIR$" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/inputs/diags" />
       <excludeFolder url="file://$MODULE_DIR$/output" />
+      <excludeFolder url="file://$MODULE_DIR$/inputs/coil 2D/diags" />
     </content>
     <orderEntry type="jdk" jdkName="warpx" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
