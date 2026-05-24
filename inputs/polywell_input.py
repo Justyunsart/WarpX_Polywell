@@ -36,6 +36,21 @@ Q = 1e-9 # Coulombs
 e_dia = 0.75 # m
 e_offset = 1.1 # m
 
+    # SOLVER #
+    # When True, use the Hybrid-PIC solver. Hybrid is the only WarpX solver
+    # that natively consumes external vector potentials, so this is also the
+    # only situation where the potentials-based field pipelines are useful;
+    # `use_potentials` is therefore derived from this toggle (see below).
+use_hybrid = False
+
+    # POTENTIALS (derived) #
+    # The B file is built from A via Coulomb-gauge FFT curl-inverse
+    # (src.bext.vector_potential) and the E file is built from φ via the
+    # closed-form ring scalar potential (src.eext.potential). The generated
+    # HDF5 cache files carry a "_potentials" tag so they never collide with
+    # the magpylib-direct / analytic-E pipeline outputs.
+use_potentials = use_hybrid
+
     # Plasma temperatures #
 Te = 50e3 * sc.eV  # electron temperature: 50 keV (typical polywell target)
 #Ti = 1e3  * sc.eV  # ion temperature: 1 keV (ions gain energy from potential well)
@@ -81,21 +96,25 @@ grid = picmi.Cartesian3DGrid(
     warpx_max_grid_size=32,
 )
 
-#solver = picmi.ElectrostaticSolver(grid=grid)
-solver = picmi.ElectromagneticSolver(
-    grid=grid,
-    method="Yee",   # options: "Yee", "CKC", "psatd"
-    cfl=0.99,
-)
-# note: The Hybrid-PIC solver does not support external E-fields (needs external vector potentials instead)
-"""solver = picmi.HybridPICSolver(
-    grid=grid,
-    Te=1.0,
-    n0=p_density,
-    gamma=1,
-    plasma_resistivity=0,
-    n_floor=(p_density*plasma_bounding),
-)"""
+# note: The Hybrid-PIC solver does not support external E-fields applied to
+# particles; it consumes the external B-field through a vector potential A.
+# The `use_hybrid` toggle above flips both the solver class and the field
+# pipelines (via `use_potentials`) in lockstep so the cache files match.
+if use_hybrid:
+    solver = picmi.HybridPICSolver(
+        grid=grid,
+        Te=1.0,
+        n0=p_density,
+        gamma=1,
+        plasma_resistivity=0,
+        n_floor=(p_density * plasma_bounding),
+    )
+else:
+    solver = picmi.ElectromagneticSolver(
+        grid=grid,
+        method="Yee",   # options: "Yee", "CKC", "psatd"
+        cfl=0.99,
+    )
 
 ###################
 # === SPECIES === #
@@ -158,27 +177,33 @@ ext_path = setup_bext(
     warpx_module=warpx,
     I=I, dia=b_dia, offset=b_offset,
     domain=domain,                     # only used by "file" method; ignored by "analytic"
+    solver="hybrid" if use_hybrid else None,
+    use_potentials=use_potentials,
 )
 
 ## Configure E-field (file-based only for now)
     # note: "file" B-field and E-field share the same .h5 file.
     # "analytic" B-field means E needs its own file, OR its own parse setup.
 if e_method is not None:
-    method = EMethods[e_method].value[0]
+    # `method` is ignored when use_potentials=True (φ → -∇φ pipeline takes over).
+    method = EMethods[e_method].value[0] if not use_potentials else None
     if b_method == "file":
         # B already made the .h5 file — append E-field data to it
         particles.E_ext_particle_init_style = "read_from_file"
         ext_path = fill_eext_file(ext_path, method,
                                   e_dia, e_offset,
-                                  Q, domain)
+                                  Q, domain,
+                                  use_potentials=use_potentials)
         particles.read_fields_from_path = ext_path
     else:
         # Analytic B doesn't make an .h5. E-field needs its own file.
         particles.E_ext_particle_init_style = "read_from_file"
-        dummy_ext = make_bext_file(0, b_dia, b_offset, domain)  # zero-current B file as scaffold
+        dummy_ext = make_bext_file(0, b_dia, b_offset, domain,
+                                   use_potentials=use_potentials)  # zero-current scaffold
         ext_path = fill_eext_file(dummy_ext, method,
                                   e_dia, e_offset,
-                                  Q, domain)
+                                  Q, domain,
+                                  use_potentials=use_potentials)
         particles.read_fields_from_path = ext_path
 
 ###############
@@ -283,6 +308,7 @@ run_params = {
     "solver_type":       type(solver).__name__,
     "solver_method":     getattr(solver, "method", None),
     "cfl":               getattr(solver, "cfl", None),
+    "use_hybrid":        int(bool(use_hybrid)),
     # diagnostics
     "diag_period":       field_diag.period,
     "diag_path":         str(run_dir),

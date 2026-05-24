@@ -148,30 +148,65 @@ def _fill_efield_datasets(filepath, Ex, Ey, Ez, grid_spacing, grid_offset):
     print(f"[_fill_efield_datasets] Finished writing E-field datasets to {filepath}")
 
 
-def fill_eext_file(filepath, method:Callable, dia, offset, Q, domain: Domain):
+def _get_e_field_data_via_potentials(dia, offset, Q, domain: Domain):
+    """
+    E-field on the WarpX grid via the closed-form ring scalar potential.
+
+    Builds φ from 6 polywell-arranged rings (src.eext.potential.compute_phi_grid),
+    then takes E = -∇φ. Vectorized over the whole grid for each ring, so it's
+    typically much faster than the per-point analytic-E loop in get_e_field_data.
+
+    Returns
+    -------
+    Ex, Ey, Ez : (nx, ny, nz) arrays in V/m
+    grid_spacing : list [dx, dy, dz] in meters
+    """
+    from src.eext.potential import compute_phi_grid, compute_E_from_phi
+
+    print(
+        f"[_get_e_field_data_via_potentials] Computing φ on grid: dia={dia}m, "
+        f"offset={offset}m, Q={Q}C, domain={domain.symmetry} L={domain.L}m N={domain.N}"
+    )
+    phi, spacing = compute_phi_grid(Q=Q, dia=dia, offset=offset, domain=domain)
+    Ex, Ey, Ez = compute_E_from_phi(phi, spacing)
+    print(
+        f"[_get_e_field_data_via_potentials] φ range: [{phi.min():.3e}, {phi.max():.3e}] V, "
+        f"|E|_max={np.sqrt(Ex**2 + Ey**2 + Ez**2).max():.3e} V/m"
+    )
+    return Ex, Ey, Ez, list(spacing)
+
+
+def fill_eext_file(filepath, method:Callable, dia, offset, Q, domain: Domain,
+                   use_potentials: bool = False):
     """
     This function runs after the B-field external file functions are done.
     - Those functions make the .h5 file and also provides the filepath that this function needs
 
     filepath: the path to the .h5 file
-    method: callable method for the analytic E-field
+    method: callable method for the analytic E-field. Ignored when
+            `use_potentials=True` (the φ → -∇φ pipeline is used instead).
     dia: E-field ring diameter (m)
     Q: the current of the E-field rings (Coulombs)
     domain: simulated-domain spec; the upstream B file already encodes the
             symmetry tag in its stem, so this function's filename addition
             does not need its own.
+    use_potentials: if True, compute E by superposing the closed-form ring
+            scalar potential φ from 6 polywell-arranged rings and taking
+            -∇φ. The appended filename segment carries a "_potentials" tag.
     """
     print(
         f"[fill_eext_file] Starting E-field external file generation: dia={dia}m, "
-        f"offset={offset}m, Q={Q}C, domain={domain.symmetry} L={domain.L}m N={domain.N}"
+        f"offset={offset}m, Q={Q}C, domain={domain.symmetry} L={domain.L}m N={domain.N}, "
+        f"use_potentials={use_potentials}"
     )
 
     backend = get_backend(subdir="bext")
 
     ## To even determine if the methods should be run, check if a file with the same name exists
         # the E-field parameters to append the filepath name with
+    e_tag = "_potentials" if use_potentials else ""
     filepath_addition = (
-        f"_E_ext_Q-{Q}_D-{dia}m_offset-{offset}m_C_L-{domain.L}m_N-{domain.N}.h5"
+        f"_E_ext{e_tag}_Q-{Q}_D-{dia}m_offset-{offset}m_C_L-{domain.L}m_N-{domain.N}.h5"
     )
         # derive the final file name from the input filepath stem
     filepath = pathlib.Path(filepath) # ensure pathlib can work with the input filepath
@@ -187,8 +222,11 @@ def fill_eext_file(filepath, method:Callable, dia, offset, Q, domain: Domain):
         print(f"[fill_eext_file] File does not exist. Continuing with .h5 generation")
 
     ## First, get the data
-    print(f"[fill_eext_file] Computing E-field data using method: {method.__name__}")
-    Ex, Ey, Ez, grid_spacing = get_e_field_data(method, dia, offset, Q, domain)
+    if use_potentials:
+        Ex, Ey, Ez, grid_spacing = _get_e_field_data_via_potentials(dia, offset, Q, domain)
+    else:
+        print(f"[fill_eext_file] Computing E-field data using method: {method.__name__}")
+        Ex, Ey, Ez, grid_spacing = get_e_field_data(method, dia, offset, Q, domain)
 
     ## Next, fill the .h5 file with the data
         # note: the fill function used below uses a 'with open()' block, so

@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS runs (
     solver_type         TEXT,
     solver_method       TEXT,
     cfl                 REAL,
+    use_hybrid          INTEGER NOT NULL DEFAULT 0,
 
     -- diagnostics
     diag_period         INTEGER,
@@ -110,10 +111,11 @@ CREATE TABLE IF NOT EXISTS runs (
 # Indexes are created after migrations so they don't fail on pre-existing
 # databases that are missing a column.
 _INDEXES = [
-    "CREATE INDEX IF NOT EXISTS idx_runs_timestamp ON runs(timestamp)",
-    "CREATE INDEX IF NOT EXISTS idx_runs_status    ON runs(status)",
-    "CREATE INDEX IF NOT EXISTS idx_runs_b_method  ON runs(b_method)",
-    "CREATE INDEX IF NOT EXISTS idx_runs_e_method  ON runs(e_method)",
+    "CREATE INDEX IF NOT EXISTS idx_runs_timestamp  ON runs(timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_runs_status     ON runs(status)",
+    "CREATE INDEX IF NOT EXISTS idx_runs_b_method   ON runs(b_method)",
+    "CREATE INDEX IF NOT EXISTS idx_runs_e_method   ON runs(e_method)",
+    "CREATE INDEX IF NOT EXISTS idx_runs_use_hybrid ON runs(use_hybrid)",
 ]
 
 # Columns added after the original schema. (column_name, ddl_type) -- applied
@@ -123,6 +125,7 @@ _MIGRATIONS: list[tuple[str, str]] = [
     ("symmetry", "TEXT NOT NULL DEFAULT 'full'"),
     ("particle_mode", "TEXT NOT NULL DEFAULT 'density'"),
     ("n_test_particles_per_cell", "INTEGER"),
+    ("use_hybrid", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 # Columns removed from the schema. Dropped via ALTER TABLE on existing DBs;
@@ -331,6 +334,7 @@ class RunsDB:
         b_method=None,
         e_method=None,
         solver_type=None,
+        use_hybrid=None,
         since=None,
         limit=100,
     ):
@@ -346,6 +350,9 @@ class RunsDB:
             Filter by E-field method (e.g. "FW", "None").
         solver_type : str, optional
             Filter by solver class name ("ElectromagneticSolver", ...).
+        use_hybrid : bool | int | str, optional
+            Filter by whether the run used the Hybrid-PIC solver. Accepts
+            truthy strings from the CLI ("1", "true", "yes", "y", "t").
         since : str, optional
             ISO-8601 timestamp; returns runs newer than this.
         limit : int
@@ -364,6 +371,11 @@ class RunsDB:
         if solver_type is not None:
             clauses.append("solver_type = ?")
             params.append(solver_type)
+        if use_hybrid is not None:
+            if isinstance(use_hybrid, str):
+                use_hybrid = use_hybrid.strip().lower() in ("1", "true", "yes", "y", "t")
+            clauses.append("use_hybrid = ?")
+            params.append(1 if use_hybrid else 0)
         if since is not None:
             clauses.append("timestamp >= ?")
             params.append(since)
@@ -518,7 +530,7 @@ _BACKFILL_COLUMNS = {
     "e_method", "e_charge", "e_dia", "e_offset",
     "grid_L", "grid_N", "particles_per_cell", "symmetry",
     "particle_mode", "n_test_particles_per_cell",
-    "solver_type", "solver_method", "cfl",
+    "solver_type", "solver_method", "cfl", "use_hybrid",
     "diag_period", "diag_path",
     "notes", "git_commit",
 }
@@ -616,6 +628,7 @@ def _extract_from_python_snapshot(py_path):
         "n_test_particles_per_cell": "n_test_particles_per_cell",
         "plasma_bounding":           "plasma_bounding",
         "number_per_cell_each_dim":  "particles_per_cell",
+        "use_hybrid":                "use_hybrid",
     }
 
     def _eV_literal(node):
@@ -695,11 +708,12 @@ def _print_runs(rows):
         return
     # Compact one-line-per-run dump; full dicts are available via get_run().
     for r in rows:
+        hybrid_flag = "Y" if r.get("use_hybrid") else "N"
         print(
             f"[{r['id']:>4}] {r.get('timestamp') or '?':<19} "
             f"{r.get('status','?'):<10} "
             f"b={r.get('b_method')} e={r.get('e_method')} "
-            f"solver={r.get('solver_type')} "
+            f"solver={r.get('solver_type')} hybrid={hybrid_flag} "
             f"steps={r.get('max_steps')} N={r.get('grid_N')} L={r.get('grid_L')} "
             f"sym={r.get('symmetry')} mode={r.get('particle_mode')} "
             f"  {r.get('run_dir')}"
