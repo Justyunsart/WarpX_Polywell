@@ -74,6 +74,12 @@ class PolywellConfig:
     b_offset:                       float           = 1.1
     I:                              float           = 8e6
     b_method:                       str             = "hybrid"
+    substeps:                       int             = -1
+
+    # n-turn coil
+    n_turns:                        int             = 1
+    b_inner_radius:                 float           = None  # defaults to b_dia/2
+    b_outer_radius:                 float           = None  # defaults to b_dia/2
 
     # E-field           
     e_method:                       str             = None
@@ -100,6 +106,14 @@ class PolywellConfig:
             raise ValueError(f"`b_method` must be one of {VALID_B_METHODS}")
         if not self.N or not self.L:
             raise ValueError(f"`L` and `N` must be provided for proper Domain initialization")
+        if self.solver_type == "hybrid" and self.substeps < 0:
+            raise ValueError(f"`substeps`: B-field solve substeps, needs to be provided in config when using `HybridPICSolver`")
+        
+        # If single turn coil, a = b
+        if self.b_inner_radius is None:
+            self.b_inner_radius = self.b_dia / 2
+        if self.b_outer_radius is None:
+            self.b_outer_radius = self.b_dia / 2
 
         import scipy.constants as sc
         import numpy as np
@@ -109,7 +123,6 @@ class PolywellConfig:
         # NOW CALCULATING B_COIL (@ center) FROM COIL CONFIG
         MU0 = 4 * np.pi * 1e-7
         self.B_coil = (MU0 * self.I) / self.b_dia      # field at coil center, Tesla
-        self.beta = self.p_density * self.Ti_J * 2 * MU0 / self.B_coil**2
         self.domain = derive_domain(self.symmetry, self.L, self.N)
         self.dx   = 2*self.L / self.N if self.symmetry == "full" else self.L / (self.N / 2)
 
@@ -141,17 +154,18 @@ HYBRID_CONFIG = PolywellConfig(
     symmetry                = "full",
     particle_mode           = "density",
     solver_type             = "hybrid",
-    p_density               = 1e21,
-    Ti_eV                   = 85e3,
-    Te_eV                   = 50e3,
-    plasma_bounding         = 0.11,
-    L                       = 2.0,
-    N                       = 24,
-    n_per_cell_each_dim     = [10, 10, 10],
-    b_dia                   = 0.435,
-    b_offset                = 1.1,
-    I                       = 1e6,
+    p_density               = 4.4e21,
+    Ti_eV                   = 1e3,
+    Te_eV                   = 1e3,
+    plasma_bounding         = 0.05, # this needs to actually be within the null zone
+    L                       = 0.3,
+    N                       = 128,
+    n_per_cell_each_dim     = [4, 4, 4],
+    b_dia                   = 0.2,
+    b_offset                = 0.16,
+    I                       = 73e3,
     b_method                = "file",
+    substeps                = 5,
     e_method                = None,
     Q                       = 0.0,
     e_dia                   = 0.0,

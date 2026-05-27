@@ -29,11 +29,11 @@ MU0 = 4e-7 * np.pi
 # Default polywell coil layout, matching make_collection.py
 # Each entry: (axis, signed_position, current_sign_multiplier)
 POLYWELL_COILS = [
-    ('x', -1,  1),   # s1: X-axis at -offset, current +I
-    ('x',  1, -1),   # s2: X-axis at +offset, current -I
+    ('x', -1,  -1),   # s1: X-axis at -offset, current -I
+    ('x',  1, 1),   # s2: X-axis at +offset, current +I
     ('y', -1, -1),   # s3: Y-axis at -offset, current -I
     ('y',  1,  1),   # s4: Y-axis at +offset, current +I
-    ('z', -1,  1),   # s5: Z-axis at -offset, current +I
+    ('z', -1,  -1),   # s5: Z-axis at -offset, current -I
     ('z',  1,  1),   # s6: Z-axis at +offset, current +I
 ]
 
@@ -284,3 +284,59 @@ def build_bext_expressions(I, dia, offset):
         'By': preamble + "; " + "+".join(By_terms),
         'Bz': preamble + "; " + "+".join(Bz_terms),
     }
+
+def _coil_aext_term(tag, axis, component):
+    """
+    Return the expression fragment for one coil's contribution to a
+    Cartesian component (Ax, Ay, or Az) using phi_hat projection.
+    Current I is folded in by the caller as a prefactor.
+    """
+    # phi_hat projection (cyclic ordering, current-independent geometry):
+    # axis='z': Ax=-Aphi*y/r,  Ay=+Aphi*x/r,  Az=0
+    # axis='x': Ax=0,          Ay=-Aphi*z/r,  Az=+Aphi*y/r
+    # axis='y': Ax=+Aphi*z/r,  Ay=0,          Az=-Aphi*x/r
+    mapping = {
+        'z': {'Ax': f"-Aphi_{tag}*y/(r_{tag}+1e-30)",  'Ay': f"Aphi_{tag}*x/(r_{tag}+1e-30)",   'Az': "0.0"},
+        'x': {'Ax': "0.0",                              'Ay': f"-Aphi_{tag}*z/(r_{tag}+1e-30)",  'Az': f"Aphi_{tag}*y/(r_{tag}+1e-30)"},
+        'y': {'Ax': f"Aphi_{tag}*z/(r_{tag}+1e-30)",   'Ay': "0.0",                              'Az': f"-Aphi_{tag}*x/(r_{tag}+1e-30)"},
+    }
+    return mapping[axis][component]
+
+def build_aext_expressions(I, dia, offset):
+    """
+    Returns a dict of 6 coil entries for WarpX's A_external nested dict.
+    Each coil has its own self-contained Ax, Ay, Az parser expressions
+    with only 9 geometric variables in the preamble.
+
+    Returns an A_external value that is accepted by HybridPICSolver
+    """
+    a = dia / 2
+    coils = {}
+
+    for idx, (axis, pos_sign, I_sign) in enumerate(POLYWELL_COILS):
+        tag = str(idx + 1)
+        pos = pos_sign * offset
+        coil_I = I_sign * I
+
+        B_only_prefixes = ('ct_', 'st_', 'Bax_', 'Br_')
+        var_defs = [v for v in _coil_var_defs(tag, axis, pos, a)
+                    if not any(v.startswith(p) for p in B_only_prefixes)]
+        var_defs.append(
+            f"Aphi_{tag}={MU0:.15e}/{np.pi:.15e}"
+            f"*((1.0-0.5*k_{tag}**2)*K_{tag}-E_{tag})"
+            f"/(sqrt(k_{tag}**2+1e-30)*sb_{tag})"
+        )
+        preamble = "; ".join(var_defs)
+
+        ax_term = _coil_aext_term(tag, axis, 'Ax')
+        ay_term = _coil_aext_term(tag, axis, 'Ay')
+        az_term = _coil_aext_term(tag, axis, 'Az')
+
+        coils[f'coil_{tag}'] = {
+            'Ax_external_function': preamble + "; " + (f"{coil_I:.15e}*({ax_term})" if ax_term != "0.0" else "0.0"),
+            'Ay_external_function': preamble + "; " + (f"{coil_I:.15e}*({ay_term})" if ay_term != "0.0" else "0.0"),
+            'Az_external_function': preamble + "; " + (f"{coil_I:.15e}*({az_term})" if az_term != "0.0" else "0.0"),
+            'A_time_external_function': '1.0',
+        }
+
+    return coils
