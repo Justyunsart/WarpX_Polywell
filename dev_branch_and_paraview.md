@@ -52,4 +52,5 @@ In root directory `./WarpX_Polywell`
 3) Right-click `Particles` from the `paraview.pmd` file just imported via the `part_diag` folder in the Pipeline Browser Window
 4) `Add Filer` -> `Alphabetical` -> `Merge Blocks` -> `Apply`
 5) Right-click the `Merge Blocks` pipeline just added
-6) `Add Filer` -> `Alphabetical` -> `Temporal Particles to Pathlines` -> `Apply`
+6) `Add Filer` -> `Alphabetical` -> `Temporal Particles to Pathlines`
+7) *Important*: While in properties of `Temporal Particles to Pathlines` ensure that `Id channel array` is set to `id` (else we use presets that can swap particle ID's and hence give us big leaps across the system)
