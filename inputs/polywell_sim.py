@@ -30,6 +30,9 @@ from pathlib import Path
 
 from src.bext.analytic import build_aext_expressions
 
+from dataclasses import asdict
+import json
+
 parser = argparse.ArgumentParser(
     description="Polywell simulation"
 )
@@ -39,8 +42,14 @@ parser.add_argument(
     help="Whether to run initial test simulation by Yoon."
 )
 
+parser.add_argument(
+    "--cfg", default=None,
+    help="Provide a .json file path to use for loading the config"
+)
+
 args = parser.parse_args()
 test = args.test
+cfg = args.cfg
 
 # print(f"DENSITY: {p_density}")
 print(f"TESTING MODE: {test}")
@@ -56,11 +65,14 @@ simulation = picmi.Simulation(verbose=True)
 
 if test:
     cfg = TEST_CONFIG
-else:
+elif not cfg:
     cfg = HYBRID_CONFIG
 
 class PollywellSixCoil: 
-    def __init__(self, cfg: PolywellConfig, sim=None, test=True):
+    def __init__(self, cfg: PolywellConfig | str, sim=None, test=True):
+        """
+        cfg: PolywellConfig | Path to json-formatted polywell config
+        """
         self.sim = sim or picmi.Simulation(verbose=True)
         self.store_config_params(cfg)
         self.get_plasma_quantities()
@@ -76,7 +88,33 @@ class PollywellSixCoil:
         simulation.initialize_inputs()
         simulation.initialize_warpx()
 
+    def save_cfg_to_json(self, cfg: PolywellConfig, filepath: str) -> None:
+        """Converts a dataclass instance to JSON and saves it to a file."""
+        # Convert dataclass to a standard dictionary
+        data_dict = asdict(cfg)
+        # these are instantiated using initial arguments, hence not needed for init of PolywellConfig
+        not_required_for_init = ['domain', 'Ti_J', 'Te_J', 'dx', 'B_coil']
+        for not_required_key in not_required_for_init:
+            data_dict.pop(not_required_key)
+        filename = 'config_used.json'
+        filepath = Path(filepath, filename)
+        # Save the dictionary as a pretty-printed JSON file
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(data_dict, f, indent=4)
+        print(f"Successfully saved data to {filepath}")
+
+    def load_cfg_from_json(self, filepath: str):
+        """Loads a JSON file and unpacks it back into the specified dataclass."""
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data_dict = json.load(f)
+            
+        # Unpack the dictionary keys as keyword arguments (**kwargs) into the class
+        return PolywellConfig(**data_dict)
+
     def store_config_params(self, cfg):
+        if isinstance(cfg, str):
+            print("LOADING CFG FROM PATH")
+            cfg = self.load_cfg_from_json(cfg)
         # save config
         self.cfg = cfg
         # denote testing or not
@@ -497,6 +535,9 @@ class PollywellSixCoil:
         except Exception:
             pass
 
+        # save config as json file for easily referencing it
+        self.save_cfg_to_json(self.cfg, run_dir)
+        exit()
         run_params = {
             # simulation control
             "max_steps":            self.max_steps,

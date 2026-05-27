@@ -49,7 +49,7 @@ class PolywellConfig:
 
     # geometry
     symmetry:                       str             = "full"
-    domain:                         Domain          = None
+    domain:                         Domain          = field(init=False)
 
     # count/density 
     particle_mode:                  str             = "density"
@@ -92,7 +92,6 @@ class PolywellConfig:
     Te_J:                       float           = field(init=False)
     dx:                         float           = field(init=False)
     B_coil:                     float           = field(init=False)
-    beta:                       float           = field(init=False)
 
     def __post_init__(self):
 
@@ -157,7 +156,7 @@ HYBRID_CONFIG = PolywellConfig(
     p_density               = 4.4e21,
     Ti_eV                   = 1e3,
     Te_eV                   = 1e3,
-    plasma_bounding         = 0.05, # this needs to actually be within the null zone
+    plasma_bounding         = 0.05, # this needs to actually be within the null zone, L * bounding <= offset
     L                       = 0.3,
     N                       = 128,
     n_per_cell_each_dim     = [4, 4, 4],
