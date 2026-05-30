@@ -1,5 +1,10 @@
 # Using `inputs/polywell_hybrid.py` with `configs/polywell_hybrid_config.py`
 
+### Run and configuration saves
+- Same run directory saving process as prior
+- Added a `config_used.json` file in this run directory
+- Refer to `Using a saved .json file` below if you prefer to use configs like this
+
 ### Current diag period is set at 1, saved every step
 - This can be found in `inputs/polywell_hybrid_config.py::add_diagnostics()`
 
