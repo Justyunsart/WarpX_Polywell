@@ -340,3 +340,25 @@ def build_aext_expressions(I, dia, offset):
         }
 
     return coils
+
+def build_n_turn_aext_expression(I, offset, a, b, n):
+    """
+    Build expressions of all 6*n coils, where coils are named via coil_ij
+        i denotes which of the original six coils
+        j denotes which turn the coil is
+    """
+    rs = np.linspace(a, b, n)
+    turns_tag = [i + 1 for i in range(n)]
+    discs = {}
+
+    # construct coils of increasing radii from inner most to outer most
+    for r, turn_tag in zip(rs, turns_tag):
+        coils_at_current_turn = build_aext_expressions(I, r*2, offset)
+
+        # append these to the total set of coils (discs)
+        # warpx accepts multiple a_ext as long as they have their own name and
+        # axis-specified solutions
+        for name, val in coils_at_current_turn.items():
+            discs[f"{name}_{turn_tag}"] = val
+
+    return discs
