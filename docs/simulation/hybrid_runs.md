@@ -1,5 +1,8 @@
 # Using `inputs/polywell_hybrid.py` with `configs/polywell_hybrid_config.py`
 
+### Current diag period is set at 1, saved every step
+- This can be found in `inputs/polywell_hybrid_config.py::add_diagnostics()`
+
 #### Notes: 
 1) Please bring up any concerns you have about the parameters used
 2) Smaller scale
