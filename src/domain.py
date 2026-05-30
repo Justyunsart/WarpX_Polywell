@@ -30,15 +30,27 @@ class Domain:
     particle_bc_hi: tuple[str, str, str]
 
 
-def derive_domain(symmetry: str, L: float, N: int) -> Domain:
+def derive_domain(symmetry: str, L: float, N: int, hybrid=False) -> Domain:
+    # Note in Hybrid, either periodic or Neumann field BC's are accepted
+    # These may not be reflective of desired conditions
+    # Open BC's in Hybrid resort to PML boundaries, which are not implemented with this solver
+    neumann_bc = ["neumann"]*3
+    open_bc = ["open"]*3
+    if hybrid: # need both to be neumann, extend L so system is far from boundaries
+        upper_bc = neumann_bc
+        lower_bc = neumann_bc
+    else:
+        upper_bc = open_bc
+        lower_bc = open_bc
     if symmetry == "full":
         return Domain(
             L=L, N=N, symmetry="full",
             lower=(-L, -L, -L),
             upper=(+L, +L, +L),
             n_cells=(N, N, N),
-            field_bc_lo=("open", "open", "open"),
-            field_bc_hi=("open", "open", "open"),
+            # "open" in EM, "neumann" in hybrid
+            field_bc_lo=lower_bc,
+            field_bc_hi=upper_bc,
             particle_bc_lo=("absorbing", "absorbing", "absorbing"),
             particle_bc_hi=("absorbing", "absorbing", "absorbing"),
         )
@@ -59,8 +71,9 @@ def derive_domain(symmetry: str, L: float, N: int) -> Domain:
             lower=(0.0, 0.0, 0.0),
             upper=(+L, +L, +L),
             n_cells=(half, half, half),
-            field_bc_lo=("pmc", "pmc", "pmc"),
-            field_bc_hi=("open", "open", "open"),
+            field_bc_lo=["neumann"]*3, # PMC = NEUMANN
+            # "open" in EM, "neumann" in hybrid
+            field_bc_hi=upper_bc,
             particle_bc_lo=("reflecting", "reflecting", "reflecting"),
             particle_bc_hi=("absorbing", "absorbing", "absorbing"),
         )
