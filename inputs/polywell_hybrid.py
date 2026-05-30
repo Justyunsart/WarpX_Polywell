@@ -69,13 +69,8 @@ import os
 import shutil
 
 # Pywarpx utils, plus callbacks which can be useful for diagnostic (live saving of fields for example)
-from pywarpx import picmi, warpx, particles, fields, amrex
-from pywarpx.callbacks import installcallback
+from pywarpx import picmi
 
-# Custom code for loading B-field, E-field, and saving them in a database
-from src.bext.bext import setup_bext, make_bext_file
-from src.eext.eext import fill_eext_file # should run AFTER B-field init.
-from src.eext.methods import EMethods # enum registry for available methods
 from src.db.runs import RunsDB, new_run_dir
 
 from configs.polywell_hybrid_config import PolywellHybridConfig, HYBRID_CONFIG
