@@ -28,6 +28,7 @@ to simulate plasma confinement in a polywell magnetic configuration.
 |---|---|
 | [Running a Simulation](simulation/running.md) | How to launch and configure a run |
 | [Input Parameters](simulation/parameters.md) | Every tunable parameter in `polywell_input.py` |
+| [Hybrid-PIC Resistivity](simulation/hybrid_resistivity.md) | Why `plasma_resistivity` can't depend on position, the current-damping callback workaround (2D coil deck), and the embedded-boundary trade-off |
 | [Output Files](simulation/output.md) | Diagnostics format, HDF5 structure, how to read results |
 
 ### Source Modules

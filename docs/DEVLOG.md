@@ -7,6 +7,84 @@ entry — `git log` already covers those.
 
 ---
 
+## 2026-06-01 — Spatial "resistive coil islands" in the 2D coil deck via current-damping callback
+
+### What changed
+
+- **Removed the spatial `plasma_resistivity` expression from
+  `inputs/coil 2D/coil_2d.py`.** It was a two-Gaussian bump in `(x, z)` at
+  the two wire positions (`z = ±d/2`) meant to create high-η "conductor
+  islands." WarpX aborted at startup with
+  `ParmParse: failed to parse … due to unknown symbol x`. Replaced with a
+  uniform scalar `plasma_resistivity=eta_bg`.
+- **Added a current-damping callback to emulate the islands.** New
+  `damp_current_at_coils()` installed via `installafterdeposition`. Each
+  step, after current deposition and before the hybrid E-solve, it
+  multiplies the deposited `current_fp` (all three directions) by a cached
+  spatial factor `1 / (1 + (eta_coil/eta_bg)·g(x,z))`, where `g` is the same
+  two-Gaussian bump. At a coil center the factor ≈ `eta_bg/eta_coil ≈ 0`
+  (current zeroed → conductor-like); in the bulk it ≈ 1 (untouched). The
+  `eta_bg`/`eta_coil`/`w`/`dh` variables that defined the old expression are
+  reused as the callback's contrast/width knobs.
+- **New doc page
+  [`docs/simulation/hybrid_resistivity.md`](simulation/hybrid_resistivity.md)**
+  documenting the parser limit, the callback technique, and the
+  embedded-boundary trade-off. Linked from `docs/README.md` and
+  cross-referenced from `docs/simulation/parameters.md`.
+
+### Why
+
+WarpX registers the hybrid resistivity parser with a **fixed two-symbol
+argument list**: `pywarpx.hybridpicmodel."plasma_resistivity(rho,J)"`. Only
+`rho`, `J`, registered constants, and math functions are in scope — there
+are **no spatial coordinates**, so any `x`/`z` token is an unknown symbol.
+(The external-field parsers like `Ay_external_function(x,y,z)` *do* expose
+coordinates, which is why `Ay_expr` in the same deck parses fine — easy to
+conflate the two.) Resistivity therefore cannot be made position-dependent
+through the input deck at all; the only way to localize resistive behavior
+in space is to act on the fields/current from a Python callback.
+
+Damping `current_fp` after deposition is the lightest intervention that
+produces the intended effect (no plasma current through the wire cells)
+and runs at the right point in the step for the hybrid Ohm's-law solve to
+see it.
+
+### Gotchas / follow-ups
+
+- **`plasma_resistivity(rho,J)` and `plasma_hyper_resistivity(rho,B)` are
+  never spatial.** Same trap applies to the polywell hybrid path
+  (`use_hybrid=True`), which currently uses a scalar `0` so isn't bitten —
+  but don't try to upgrade it to an `x,y,z` expression.
+- **The callback damps *current*, not via an `E = ηJ` term.** It zeroes
+  current at the coils but does not deposit the resistive E-field / Ohmic
+  heating a true local η would. For that signature, patch `Efield_fp` in
+  the callback instead. Documented in the new page.
+- **Field access idiom for callbacks.** `sim.fields.get("current_fp",
+  dir=sim.extension.libwarpx_so.Direction(idir), level=0)` returns the
+  per-direction MultiFab; `mf.mesh("x")`/`mf.mesh("z")` give global
+  cell coordinates with the MultiFab's own centering (robust for the
+  collocated grid). `mf[:, :]` read is a global allgather; assignment is
+  local-block — correct under MPI, cheap at 64².
+- **Shape safety.** `factor.reshape(arr.shape[:2] + (1,)*(arr.ndim-2))`
+  broadcasts the 2D mask over any trailing component axis the array carries.
+- **Embedded boundary was considered and rejected for now.** EB conductor
+  *field* BCs are EM-solver–only and don't apply to the hybrid algebraic
+  E-field; EB particle *absorption* does work but the coils are ~1 cell wide
+  here (under-resolved for EB) and the B-field comes from the analytic `Ay`,
+  not the coil-as-object. Revisit only if particle exclusion is the goal and
+  the mesh is refined.
+
+### Verifying
+
+```bash
+cd "inputs/coil 2D" && python coil_2d.py   # (set MAX_STEPS small to smoke-test)
+```
+
+A 2-step smoke run completes cleanly — no `ParmParse`/SIGABRT, no callback
+exception, both steps advance through `HybridPICEvolveFields`.
+
+---
+
 ## 2026-05-23 — Vector-potential pipeline for Hybrid-PIC; A from B via FFT curl-inverse
 
 ### What changed

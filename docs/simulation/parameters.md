@@ -147,6 +147,13 @@ else:
 | `HybridPICSolver` | `use_hybrid=True` | Consumes external B-field as a vector potential A from the openPMD file via `external_vector_potential.polywell.{read_from_file, path}`. Does **not** support external E-fields applied to particles. |
 | `ElectrostaticSolver` | (commented out) | Poisson-based; simpler but no EM waves |
 
+> **`plasma_resistivity` is `(rho, J)` only — never spatial.** The hybrid
+> parser exposes `rho` and `J`, *not* `x`/`y`/`z`. An expression with a
+> coordinate aborts at startup (`ParmParse … unknown symbol x`). To make
+> resistive behavior vary in space, keep `plasma_resistivity` scalar and
+> modify the deposited current in a callback — see
+> [Hybrid-PIC Resistivity](hybrid_resistivity.md).
+
 ---
 
 ## Diagnostics
