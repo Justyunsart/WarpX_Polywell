@@ -104,7 +104,7 @@ class PolywellHybridConfig:
         self.domain = derive_domain(self.symmetry, self.L, self.N, hybrid=True)
         self.dx   = 2*self.L / self.N if self.symmetry == "full" else self.L / (self.N / 2)
 
-# configs/polywell_config.py
+# configs/polywell_hybrid_config.py
 
 HYBRID_CONFIG = PolywellHybridConfig(
     symmetry                = "full",
@@ -118,8 +118,8 @@ HYBRID_CONFIG = PolywellHybridConfig(
     # NOTE --- hence spawns closer to center of core where beta is lower
     plasma_bounding         = 1, # this needs to actually be within the null zone, L * bounding <= offset
     L                       = 0.5,
-    N                       = 64,
-    n_per_cell_each_dim     = [3, 3, 3],
+    N                       = 32,
+    n_per_cell_each_dim     = [10, 10, 10],
     b_dia                   = 0.1,
     b_offset                = 0.1,
     I                       = 8e3,
