@@ -642,87 +642,84 @@ class PollywellSixCoilHybrid:
 
     def zero_coil_current(self):
 
-        print("ADDING ZERO CURRENT AT COIL CALLBACK")
+        print("ADDING COIL CURRENT-DAMPING CALLBACK")
 
+        # 3D translation of coil_2d.py's `damp_current_at_coils`: emulate
+        # high-resistivity "conductor island" coils by smoothly damping the
+        # deposited plasma current toward zero at each coil ring. See
+        # docs/simulation/hybrid_resistivity.md for why plasma_resistivity
+        # cannot be made position-dependent.
         r_coil = self.b_dia / 2
-        tol = self.dx  # one cell thickness
+        w = self.dx  # Gaussian island width ~ one cell
 
-        # Our tolerance defines our ring thickness, this may need to change
-        # A fine-enough grid will bring us closer to an infinitesamly thin ring
-        # As of now it is about a cell in thickness
-        def coil_mask(X, Y, Z, axis, pos):
-            # axial - right width axially
-            # radial - ring width radially
-            # both <= 2 * tol = 2 * self.dx
+        # eta_bg MUST track the solver's plasma_resistivity (see set_solver);
+        # the wire cells are suppressed by the eta_coil/eta_bg contrast.
+        eta_bg = 3e-8
+        eta_coil = 1e3
+        contrast = eta_coil / eta_bg
+
+        coil_positions = [('x', -self.b_offset), ('x', self.b_offset),
+                          ('y', -self.b_offset), ('y', self.b_offset),
+                          ('z', -self.b_offset), ('z', self.b_offset)]
+
+        def ring_distance2(X, Y, Z, axis, pos):
+            # squared distance from each grid point to the coil ring wire
+            # (radius r_coil, centered at `pos` along `axis`)
             if axis == 'x':
-                axial = np.abs(X - pos) <= tol
+                axial = X - pos
                 radial = np.sqrt(Y**2 + Z**2)
             elif axis == 'y':
-                axial = np.abs(Y - pos) <= tol
+                axial = Y - pos
                 radial = np.sqrt(X**2 + Z**2)
             elif axis == 'z':
-                axial = np.abs(Z - pos) <= tol
+                axial = Z - pos
                 radial = np.sqrt(X**2 + Y**2)
-            ring = (radial >= r_coil - tol) & (radial <= r_coil + tol)
-            return axial & ring
-        
-        coil_positions = [('x', -self.b_offset), ('x', self.b_offset),
-                      ('y', -self.b_offset), ('y', self.b_offset),
-                      ('z', -self.b_offset), ('z', self.b_offset)]
-        
-        def build_mask(Jfield):
-            x = Jfield.mesh("x")
-            y = Jfield.mesh("y")
-            z = Jfield.mesh("z")
-            X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
-            mask = np.zeros_like(X, dtype=bool)
+            return axial**2 + (radial - r_coil)**2
+
+        def build_factor(mf):
+            # Sum of ring Gaussians -> smooth damping factor.
+            # At a coil g~1 => factor~eta_bg/eta_coil~0; in bulk g~0 => factor~1.
+            xs = mf.mesh("x")
+            ys = mf.mesh("y")
+            zs = mf.mesh("z")
+            X = xs[:, None, None]
+            Y = ys[None, :, None]
+            Z = zs[None, None, :]
+            g = np.zeros((xs.size, ys.size, zs.size))
             for axis, pos in coil_positions:
-                mask |= coil_mask(X, Y, Z, axis, pos)
-            return mask
+                g = g + np.exp(-ring_distance2(X, Y, Z, axis, pos) / (w * w))
+            return 1.0 / (1.0 + contrast * g)
 
-        # runtime only dependent upon mask creation and application 
-        def _zero_J():
+        # Per-direction cache: the mask is grid-static, so build it once.
+        # Each component's mesh carries its own centering (ghost cells differ
+        # per axis), hence a separate factor per direction.
+        _factor_cache = {}
+
+        def _damp_J():
             try:
-                print("*************************")
-                print("[_zero_J] CALLBACK FIRED")
-                print("*************************")
-                # Due to ghost cell per axis being unique, easier to define mask per axis
-                Jx = self.sim.fields.get("current_fp", dir='x', level=0)
-                Jy = self.sim.fields.get("current_fp", dir='y', level=0)
-                Jz = self.sim.fields.get("current_fp", dir='z', level=0)
-
-                mask_x = build_mask(Jx)
-                mask_y = build_mask(Jy)
-                mask_z = build_mask(Jz)
-
-                print("NUM TO MASK: ", mask_x.sum())
-
-                before_mask = Jx[...][mask_x].max()
-
-                print(f"[coil J] max Jx before: {before_mask:.3e}")
-
-                arrx = Jx[...].copy()
-                arry = Jy[...].copy()
-                arrz = Jz[...].copy()
-
-                arrx[mask_x] = 0.0
-                arry[mask_y] = 0.0
-                arrz[mask_z] = 0.0
-
-                Jx[...] = arrx
-                Jy[...] = arry
-                Jz[...] = arrz
-
-                after_mask = Jx[...][mask_x].max()
-
-                print(f"[coil J] max Jx before: {after_mask:.3e}")
+                Direction = self.sim.extension.libwarpx_so.Direction
+                for idir in (0, 1, 2):
+                    mf = self.sim.fields.get("current_fp", dir=Direction(idir), level=0)
+                    factor = _factor_cache.get(idir)
+                    if factor is None:
+                        factor = build_factor(mf)
+                        _factor_cache[idir] = factor
+                        print(f"[coil J] dir {idir}: factor.min = {factor.min():.3e} "
+                              f"(cached)")
+                    arr = mf[...]
+                    fac = factor.reshape(arr.shape[:3] + (1,) * (arr.ndim - 3))
+                    mf[...] = arr * fac
             except Exception as e:
-                print(f"[_zero_J] ERROR: {e}")
+                print(f"[_damp_J] ERROR: {e}")
                 raise
 
-        callbacks.installcallback('afterstep', _zero_J)
+        # The hybrid solver does NOT trigger the 'afterdeposition' hook (unlike
+        # the EM loop the 2D coil deck assumed); 'beforeEsolve' is the per-step
+        # hook that fires after the ion current is deposited but before
+        # HybridPICEvolveFields consumes current_fp.
+        callbacks.installcallback('beforeEsolve', _damp_J)
 
-        assert callbacks.isinstalled('afterstep', _zero_J), "NEVER INSTALLED CALLBACK"
+        assert callbacks.isinstalled('beforeEsolve', _damp_J), "NEVER INSTALLED CALLBACK"
 
     def add_diagnostics(self):
         # NOTE: Unused and diagnostics are set for every step

@@ -83,6 +83,21 @@ cd "inputs/coil 2D" && python coil_2d.py   # (set MAX_STEPS small to smoke-test)
 A 2-step smoke run completes cleanly — no `ParmParse`/SIGABRT, no callback
 exception, both steps advance through `HybridPICEvolveFields`.
 
+### Correction (later)
+
+The `installafterdeposition` hook claimed above (and originally in
+`hybrid_resistivity.md`) is **wrong for the hybrid loop**: probing every
+callback during a hybrid run shows the hybrid evolve path never triggers
+`afterdeposition`/`beforedeposition` — only `beforestep`, `afterstep`,
+`beforeEsolve`, `afterEsolve` (per step) and `afterBpush`/`afterEpush` (per
+substep). A function installed on `afterdeposition` registers but is never
+called, so the current is never damped. The correct hook is **`beforeEsolve`**
+(fires once per step, after deposition, before `HybridPICEvolveFields` consumes
+`current_fp`). The 3D translation in `inputs/polywell_hybrid.py`
+(`zero_coil_current`) uses `beforeEsolve`; `hybrid_resistivity.md` has been
+updated. The 2D `coil_2d.py` example is still written with
+`installafterdeposition` and would need the same fix to actually damp current.
+
 ---
 
 ## 2026-05-23 — Vector-potential pipeline for Hybrid-PIC; A from B via FFT curl-inverse

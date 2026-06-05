@@ -16,7 +16,7 @@
 # %% [markdown]
 # # 2D ion-kinetic stream vs. transverse magnetic dipole (Hybrid-PIC)
 #
-# 2D Cartesian (x, z) Hybrid-PIC run in WarpX. Quasineutral by construction: only ion macroparticles are pushed; electrons are a massless adiabatic fluid with fixed `T_e`. The stream is injected from the `x_hi` face with drift velocity `-x`. The transverse dipole is two infinite line currents along the out-of-plane (y) axis at `z = ± d/2`, anti-parallel; in hybrid mode the external field is supplied as a **vector potential** `A_y(x,z)` (Wb/m) — WarpX reconstructs `B = ∇×A` internally. Field boundaries are `neumann` on all four faces (E is algebraic in hybrid — no PML needed); particle BCs are `absorbing`. A `BoundaryScrapingDiagnostic` records loss flux face-by-face.
+# 2D Cartesian (x, z) Hybrid-PIC run in WarpX. Quasineutral by construction: only ion macroparticles are pushed; electrons are a massless adiabatic fluid with fixed `T_e`. The stream is injected from the `x_hi` face with drift velocity `-x`. The transverse dipole is two infinite line currents along the out-of-plane (y) axis at `z = ± d/2`, anti-parallel; in hybrid mode the external field is supplied as a **vector potential** `A_y(x,z)` (Wb/m) — WarpX reconstructs `B = ∇×A` internally. Field boundaries are `neumann` on all four faces (E is algebraic in hybrid — no PML needed); particle BCs are `absorbing`. A non-perturbing flux-counter callback records ion loss across the coil-to-coil midplane segment (`x=0, |z|<d/2`).
 #
 # Upstream ram pressure `ρ v²` is matched to `B² / 2μ₀` at the intended standoff (Chapman–Ferraro). Diagnostics dump full EM fields, ion charge density, and ion phase-space so post-processing can build `β_th = 2μ₀(n_i k_B T_i + n_e k_B T_e)/B²` (with `T_e` fixed by the solver, `T_i` measured) and `β_dyn = 2μ₀ ρ v² / B²` per cell; the `β_dyn = 1` contour is the empirical standoff surface.
 
@@ -24,6 +24,7 @@
 # %load_ext wurlitzer
 
 # %%
+import os
 import numpy as np
 import scipy.constants as sc
 from pywarpx import picmi, warpx
@@ -202,15 +203,9 @@ background_dist = picmi.UniformDistribution(
     directed_velocity=[-v_drift, 0.0, 0.0],
     fill_in=True,
 )
-# `warpx_save_particles_at_<face>=1` is required for the
-# ParticleBoundaryScrapingDiagnostic below to have anything to flush — without
-# these flags, outgoing particles are absorbed and discarded silently, the
-# scrape buffer stays empty, and WarpX never even creates `diags/scrape/`.
 background_i = picmi.Species(
     particle_type="proton", name="background_i",
     initial_distribution=background_dist,
-    warpx_save_particles_at_xlo=1, warpx_save_particles_at_xhi=1,
-    warpx_save_particles_at_zlo=1, warpx_save_particles_at_zhi=1,
 )
 
 stream_i_dist = picmi.UniformFluxDistribution(
@@ -225,8 +220,6 @@ stream_i_dist = picmi.UniformFluxDistribution(
 stream_i = picmi.Species(
     particle_type="proton", name="stream_i",
     initial_distribution=stream_i_dist,
-    warpx_save_particles_at_xlo=1, warpx_save_particles_at_xhi=1,
-    warpx_save_particles_at_zlo=1, warpx_save_particles_at_zhi=1,
 )
 
 layout = picmi.PseudoRandomLayout(n_macroparticles_per_cell=4, grid=grid)
@@ -234,7 +227,7 @@ layout = picmi.PseudoRandomLayout(n_macroparticles_per_cell=4, grid=grid)
 # %% [markdown]
 # ## Diagnostics
 #
-# Full EM fields + ion charge density at a fixed cadence, ion phase-space dumps for post-processing, and a boundary-scraping diagnostic recording every particle leaving the domain.
+# Full EM fields + ion charge density at a fixed cadence, plus ion phase-space dumps for post-processing. Particle loss across the coil-to-coil midplane segment is measured non-perturbatively by the flux-counter callback below (no boundary-scraping diagnostic).
 
 # %%
 PERIOD = 10
@@ -256,13 +249,6 @@ part_diag = picmi.ParticleDiagnostic(
     warpx_format="openpmd",
     warpx_openpmd_backend="h5",
 )
-scrape_diag = picmi.ParticleBoundaryScrapingDiagnostic(
-    name="scrape",
-    period=PERIOD,
-    species=[background_i, stream_i],
-    warpx_format="openpmd",
-    warpx_openpmd_backend="h5",
-)
 
 # %% [markdown]
 # ## Build + step
@@ -281,7 +267,6 @@ sim.add_species(background_i, layout=layout)
 sim.add_species(stream_i, layout=layout)
 sim.add_diagnostic(field_diag)
 sim.add_diagnostic(part_diag)
-sim.add_diagnostic(scrape_diag)
 
 # %% [markdown]
 # ## Resistive coil islands via a current-damping callback
@@ -320,7 +305,95 @@ def damp_current_at_coils():
 
 installafterdeposition(damp_current_at_coils)
 
+# %% [markdown]
+# ## Non-perturbing midplane flux counter
+#
+# Instead of an absorbing boundary, we measure ion loss across the line segment
+# joining the two coils (`x=0, |z| < d/2`) with a read-only `afterstep` callback.
+# It only *reads* the live particle arrays, so the run is bit-for-bit identical to
+# one without it. Crossing rate is the standard "flux through a plane" estimator:
+# for particles momentarily inside a one-cell-wide slab `|x| < L/2` straddling the
+# plane, `rate = Σ w·|v_x| / L`, split by sign of `v_x`. A particle drifts
+# `v·dt ≈ 0.01 m ≪ L ≈ 0.078 m` per step, so it sits in the slab for ~8 steps and
+# is never skipped; integrating `rate·dt` recovers ~`w` per crossing. `rate_minus`
+# (v_x<0, downstream toward the midplane) is the leak that penetrates the standoff;
+# `rate_plus` is the return flux. Output: `diags/segment_flux.npz`.
+
+# %%
+from pywarpx.callbacks import installafterstep
+
+_seg_L = 2.0 * Lx / Nx                 # slab width ≈ one cell (dx)
+_seg_t, _seg_minus, _seg_plus = [], [], []
+_seg_n = [0]                           # mutable step counter (closure-friendly)
+_seg_state = {}                        # lazily-cached containers + ParIter
+
+def _seg_gather(container, parit):
+    """Concatenate per-tile (x, z, ux, w) SoA arrays for one species (level 0).
+    Reads share WarpX memory (copy=False) — purely a measurement, no writes."""
+    ix = container.get_real_comp_index("x")
+    iz = container.get_real_comp_index("z")
+    iu = container.get_real_comp_index("ux")
+    iw = container.get_real_comp_index("w")
+    xs, zs, us, ws = [], [], [], []
+    for pti in parit(container, 0):
+        soa = pti.soa()
+        xs.append(np.array(soa.get_real_data(ix), copy=False))
+        zs.append(np.array(soa.get_real_data(iz), copy=False))
+        us.append(np.array(soa.get_real_data(iu), copy=False))
+        ws.append(np.array(soa.get_real_data(iw), copy=False))
+    if not xs:
+        e = np.empty(0)
+        return e, e, e, e
+    return (np.concatenate(xs), np.concatenate(zs),
+            np.concatenate(us), np.concatenate(ws))
+
+def count_segment_flux():
+    if not _seg_state:
+        # `sim.particles.get(name)` -> pyAMReX WarpXParticleContainer (the
+        # non-deprecated path; the old ParticleContainerWrapper is broken against
+        # this pyAMReX build). Cache the containers + the ParIter type once.
+        _seg_state["parit"] = sim.extension.libwarpx_so.WarpXParIter
+        _seg_state["pc"] = {s: sim.particles.get(s)
+                            for s in ("background_i", "stream_i")}
+    parit = _seg_state["parit"]
+    rminus = rplus = 0.0
+    for container in _seg_state["pc"].values():
+        x, z, vx, wt = _seg_gather(container, parit)   # vx = u ≈ v_x (non-rel)
+        if x.size == 0:
+            continue
+        m = (np.abs(x) < 0.5 * _seg_L) & (np.abs(z) < dh)
+        if m.any():
+            vm = vx[m]; wm = wt[m]
+            neg = vm < 0
+            rminus += float(np.sum(wm[neg]  * -vm[neg])) / _seg_L
+            rplus  += float(np.sum(wm[~neg] *  vm[~neg])) / _seg_L
+    _seg_t.append(_seg_n[0] * const_dt)
+    _seg_minus.append(rminus)
+    _seg_plus.append(rplus)
+    _seg_n[0] += 1
+
+installafterstep(count_segment_flux)
+
 sim.step()
+
+# Reduce across ranks (slab particles may live on any rank) and write once on root.
+try:
+    from mpi4py import MPI
+    _comm = MPI.COMM_WORLD
+    _seg_minus = _comm.allreduce(np.asarray(_seg_minus), op=MPI.SUM)
+    _seg_plus = _comm.allreduce(np.asarray(_seg_plus), op=MPI.SUM)
+    _is_root = _comm.Get_rank() == 0
+except Exception:
+    _is_root = True
+if _is_root:
+    os.makedirs("diags", exist_ok=True)
+    np.savez(os.path.join("diags", "segment_flux.npz"),
+             t_s=np.asarray(_seg_t, dtype=float),
+             rate_minus=np.asarray(_seg_minus, dtype=float),
+             rate_plus=np.asarray(_seg_plus, dtype=float),
+             dh=dh, slab_L=_seg_L)
+    print(f"[segment_flux] wrote diags/segment_flux.npz "
+          f"({len(_seg_t)} steps, peak rate_minus={np.max(_seg_minus):.3e})")
 
 # %% [markdown]
 # ## Post-processing sketch — β_dyn = 1 vs. Chapman–Ferraro
