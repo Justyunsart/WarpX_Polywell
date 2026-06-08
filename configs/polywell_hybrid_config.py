@@ -31,6 +31,8 @@ VALID_B_METHODS = ("file", "analytic")
 
 from dataclasses import dataclass, field
 from src.domain import Domain, derive_domain
+import scipy.constants as sc
+import numpy as np
 
 @dataclass
 class PolywellHybridConfig:
@@ -93,16 +95,20 @@ class PolywellHybridConfig:
         if self.r2 is None:
             self.r2 = self.b_dia / 2
 
-        import scipy.constants as sc
-        import numpy as np
-        MU0 = 4 * np.pi * 1e-7
         self.Ti_J = self.Ti_eV * sc.eV
         self.Te_J = self.Te_eV * sc.eV
         # NOW CALCULATING B_COIL (@ center) FROM COIL CONFIG
         MU0 = 4 * np.pi * 1e-7
-        self.B_coil = (MU0 * self.I) / self.b_dia      # field at coil center, Tesla
         self.domain = derive_domain(self.symmetry, self.L, self.N, hybrid=True)
         self.dx   = 2*self.L / self.N if self.symmetry == "full" else self.L / (self.N / 2)
+
+    def compute_b(self):
+        MU0 = 4 * np.pi * 1e-7
+        if self.n_turns != 1:
+            rs = np.linspace(self.r1, self.r2, self.n_turns)
+            self.B_coil = sum((MU0 * self.I) / (2 * r) for r in rs)
+        else:
+            self.B_coil = (MU0 * self.I) / self.b_dia      # field at coil center, Tesla
 
 # configs/polywell_hybrid_config.py
 
@@ -110,16 +116,20 @@ HYBRID_CONFIG = PolywellHybridConfig(
     symmetry                = "full",
     particle_mode           = "density",
     mass                    = 1,
-    p_density               = 2e19,
-    Ti_eV                   = 1000,
-    Te_eV                   = 1000,
+    # TODO: increase density x10 -> pressure x 10
+    # Larger n -> smaller alfven (whistler still binding)
+    # Larger n -> larger plasma freq -> smaller skin depth
+    # Larger n -> 
+    p_density               = 2e21,
+    Ti_eV                   = 100,
+    Te_eV                   = 100,
     # This is applied automatically in the script, ensuring plasma is spawned in the core of the system
     # NOTE --- Spawning at high-beta leads to instability, a concern to think about
     # NOTE --- hence spawns closer to center of core where beta is lower
     plasma_bounding         = 1, # this needs to actually be within the null zone, L * bounding <= offset
-    L                       = 0.5,
-    N                       = 32,
-    n_per_cell_each_dim     = [10, 10, 10],
+    L                       = 0.2,
+    N                       = 128,
+    n_per_cell_each_dim     = [5, 5, 5],
     b_dia                   = 0.1,
     b_offset                = 0.1,
     I                       = 8e3,
