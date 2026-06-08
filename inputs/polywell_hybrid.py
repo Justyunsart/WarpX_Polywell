@@ -64,18 +64,21 @@ Possible solutions to look into:
 Deeper center spawning helps immensely
 """
 
+# TODO: Try without injection to see if it stabilizes and valley goes away, would be a good ablation study to see if valley is numerical noise or due to plasma
+
 import os
 import sys
 import shutil
 
 # Pywarpx utils, plus callbacks which can be useful for diagnostic (live saving of fields for example)
-from pywarpx import picmi, callbacks, warpx
+from pywarpx import picmi, callbacks, warpx, amrex
 
 from src.db.runs import RunsDB, new_run_dir
 
 from configs.polywell_hybrid_config import PolywellHybridConfig, HYBRID_CONFIG
 from src.domain import plasma_bounds
 from src.spawn import make_layout
+from src.embedded_boundary_stl_creation import make_coil_stl
 
 import numpy as np
 import scipy.constants as sc
@@ -84,6 +87,7 @@ import argparse
 from pathlib import Path
 
 from src.bext.analytic import build_aext_expressions, build_n_turn_aext_expression
+from src.bext.analytic import B_polywell
 
 from dataclasses import asdict
 import json
@@ -128,7 +132,6 @@ M_E  = sc.m_e
 EV   = sc.eV
 MU0  = 4 * np.pi * 1e-7
 EPS0 = sc.epsilon_0
-simulation = picmi.Simulation(verbose=True)
 
 # When not loading a config from a .json file
 if not isinstance(cfg, str):
@@ -145,27 +148,35 @@ if not isinstance(cfg, str):
         print(f"Using n-turn hybrid config with n = {cfg.n_turns}, r1 = {cfg.r1}, r2 = {cfg.r2}")
         print("*********************************")
 
+    cfg.compute_b()
+
 class PollywellSixCoilHybrid: 
     def __init__(self, cfg: PolywellHybridConfig | str, sim=None, test=True):
         """
         cfg: PolywellHybridConfig | Path to json-formatted polywell config
         """
-        self.sim = sim or picmi.Simulation(verbose=True)
         self.store_config_params(cfg)
+        self.sim = sim or picmi.Simulation(
+            verbose=True, 
+            #warpx_embedded_boundary=self.set_embedded_coils(),
+            warpx_grid_type = "collocated",
+            warpx_use_filter = True
+            )
+        warpx.filter_npass_each_dir = [2, 2, 2]
         self.get_plasma_quantities()
         self.get_sim_length()
         self.set_grid()
         self.set_b_field()
         self.set_solver() 
-        #self.add_species()
-        self.add_flux_planes()
+        self.add_species()
+        #self.add_background_plasma()
+        #self.add_flux_planes()
         self.add_diagnostics()
-
+        self.define_run_management()
         self.sim.initialize_inputs()
         self.sim.initialize_warpx()
-        #self.add_injection_callback()
-        self.zero_coil_current()
-        self.define_run_management()
+        self.add_injection_callback()
+        #self.zero_coil_current()
 
     def save_cfg_to_json(self, cfg: PolywellHybridConfig, filepath: str) -> None:
         """Converts a dataclass instance to JSON and saves it to a file."""
@@ -223,7 +234,7 @@ class PollywellSixCoilHybrid:
             print(f"[WARNING] Plasma bounding spawns particles outside of reactor, re-scaling")
             # this ensures we spawn within the system, with a scaling factor to spawn closer to center
             # if no scaling, spawn at b_offset
-            new_plasma_bounding = 1/10 * (cfg.b_offset / cfg.L)
+            new_plasma_bounding = 1/5 * (cfg.b_offset / cfg.L)
             cfg.plasma_bounding = new_plasma_bounding
             print(f"[new plasma bounding value] {cfg.plasma_bounding}")
         self.plasma_bounding = cfg.plasma_bounding
@@ -325,21 +336,26 @@ class PollywellSixCoilHybrid:
         print(f"[plasma]  omega_pe/omega_ce = {self.ratio_pe_ce:.3f}  ")
         print(f"[plasma]  t_bounce = {self.t_bounce*1e9:.1f} ns")
 
-        self.dt_Alfven  = 0.5 * self.dx / self.v_A      # Alfven CFL: MHD wave can't cross a cell per step
-        self.dt_cyclo   = self.T_ci / 100                # cyclotron: 100 steps per gyration minimum
-
     def get_sim_length(self):
 
         print("\n[get_sim_length] **********************************")
+        self.dt_Alfven  = 0.5 * self.dx / self.v_A      # Alfven CFL: MHD wave can't cross a cell per step
+        self.dt_cyclo   = self.T_ci / 100                # cyclotron: 100 steps per gyration minimum
+        self.dt_thermal = self.dx / self.v_ion
+        print(self.dt_Alfven, self.dt_cyclo, self.dt_thermal)
+        self.dt_whistler = 0.5 * self.dx / self.v_e
         self.dt = self.dt_cyclo
-        
         # need substeps to account for dt_cyclo / (2*substeps) < dt_Alfven
         # substeps >= dt_cyclo / dt_Alfven / 2
         substeps_min = int(np.ceil(self.dt / (2 * self.dt_Alfven)))
-        self.substeps = max(substeps_min, 32)
+        substeps_min = int(np.ceil(max(self.dt / self.dt_Alfven, self.dt / self.dt_whistler)))
+        self.substeps = max(substeps_min, 20)
         print(f"[substeps] derived substeps = {self.substeps} = max(derived, 32)"
-                f"(dt_Bfield = {self.dt/(2*self.substeps):.3e} s, "
-                f"dt_Alfven = {self.dt_Alfven:.3e} s)")
+                f"(dt_Bfield = {self.dt/(self.substeps):.3e} s, "
+                f"dt_Alfven = {self.dt_Alfven:.3e} s, "
+                f"dt_whistler = {self.dt_whistler:.3e} s)")
+
+        assert self.dt / (self.substeps) < self.dt_whistler, "Whistler CFL violated in substeps"
 
         self.binding = "dt_cyclo and dt_Alfven"
         
@@ -407,6 +423,25 @@ class PollywellSixCoilHybrid:
             A_external = build_n_turn_aext_expression(self.I, self.b_offset, self.r1, self.r1, self.n_turns)
         self.A_external = A_external
 
+    def set_embedded_coils(self):
+        print('[stl] Adding coils from stl file')
+        coil_structure = {
+            'r1': self.r1,
+            'r2': self.r2,
+            'n_turns': self.n_turns
+        }
+        path = make_coil_stl(coil_structure, self.b_offset, self.L, self.N, full=self.domain.symmetry == "full")
+        coil_ebs = picmi.EmbeddedBoundary(
+            stl_file=path,
+            # stl_scale=1.0,
+            # stl_center=[0, 0, 0],
+            # stl_reverse_normal=False,
+        )
+        #self.sim.warpx_embedded_boundary = coil_ebs
+        print('[stl] Coils added as embedded boundaries from STL file')
+        print('[stl] Boundary conditions default to PEC for fields and absorbing for particles')
+        return coil_ebs
+
     def set_solver(self):
 
         """
@@ -436,9 +471,11 @@ class PollywellSixCoilHybrid:
             - Vacuum regions as infinite resistivity
                 - Faraday's law -> magnetic diffusion equation
             - This solves the diffusion equation in low charge density regions
-            - 
+                - if n < n_floor → use magnetic diffusion (vacuum treatment)
+                - if n > n_floor → use full Ohm's law (plasma treatment)
 
         4) Hyperresistivity
+            - diffusion operator acting on current density — similar to how viscosity acts on velocity in fluid mechanics.
             - Discretizing Faraday's law has no numerical diffusivity (poor approximation)
             - Smoothing is needed, used in E-field computation
             - Maron (2008) introduces hypers of different orders for a MHD solver
@@ -446,19 +483,23 @@ class PollywellSixCoilHybrid:
             - Higher order derivatives of Laplacian diffuse high freqs, preserve low frewqs
             - Can increase max stable time step
             - Discretized with standard second order finite difference stencils
-            - Start with eta * self.dx**2 (to get Ohm m^3), since it is present everywhere, and dependent upon 
             - hyper-resistivity is present in all regions including vacuum
         """
 
+        # solve for vacuum resistivity
+        # t_diff = mu0 * L**2 / eta
+        # eta = mu0 * L**2 / t_diff
+        eta_plasma = 3e-8
+        n_floor = 0.1 * self.p_density
         print("[set_solver] **********************************")
         solver = picmi.HybridPICSolver(
             grid=self.grid,
             Te= self.Te_eV,                      # electron temperature, eV
             n0=self.p_density,                  # reference density, m^-3
             gamma=1,                            # isothermal limit = 1, adiabatic limit = 5/3
-            plasma_resistivity=3e-8,            # ~collisionless — increase to ~1e-6 if unstable
+            plasma_resistivity=eta_plasma,            # ~collisionless — increase to ~1e-6 if unstable
             plasma_hyper_resistivity=1e-11,    # damping of the current term's second order derivative
-            n_floor=0.05 * self.p_density,             # density floor for numerical stability,
+            n_floor=n_floor,             # density floor for numerical stability,
             # NEED SUBSTEPS
             substeps=self.substeps,
             # use_rkf45 = True,
@@ -472,7 +513,6 @@ class PollywellSixCoilHybrid:
             do_external_diva_cleaning=False,
             warpx_verbose=True
         )
-        self.sim.warpx_grid_type = "collocated" # recommended by docs for Hybrid
         self.sim.particle_shape = 1             # recommended by docs for hybrid, "linear"
         self.sim.current_deposition_algo = "direct"
         print(f"[solver] hybrid solver set with:")
@@ -513,7 +553,6 @@ class PollywellSixCoilHybrid:
         vi_rms = np.sqrt(self.Ti_J / self.M)
         plasma_radius = self.plasma_bounding * self.L
         density_expr = f"if(x*x+y*y+z*z<{plasma_radius * plasma_radius}, {self.p_density}, 0.)"
-
         print(f"[species] Using density expression for analytic distribution: {density_expr}")
 
         # Ions: isotropic Maxwellian at Ti (cooler; will be accelerated by potential well)
@@ -529,6 +568,13 @@ class PollywellSixCoilHybrid:
                 particle_type='proton',
                 name='plasma_i',
                 initial_distribution=ion_dist,
+                warpx_save_particles_at_eb = True if hasattr(self.sim, 'warpx_embedded_boundary') else False,
+                warpx_save_particles_at_xlo = True,
+                warpx_save_particles_at_xhi = True,
+                warpx_save_particles_at_ylo = True,
+                warpx_save_particles_at_yhi = True,
+                warpx_save_particles_at_zlo = True,
+                warpx_save_particles_at_zhi = True
             )
 
         self.plasma_i = plasma_i
@@ -541,6 +587,34 @@ class PollywellSixCoilHybrid:
 
         print(f"[species] Added initial plasma to the simulation")
 
+    def add_background_plasma(self):
+        n_background = 0.05 * self.p_density
+        vi_rms_bg = np.sqrt(self.Ti_J / self.M)
+
+        background_dist = picmi.UniformDistribution(
+            density=n_background,
+            rms_velocity=[vi_rms_bg, vi_rms_bg, vi_rms_bg],
+        )
+
+        background_i = picmi.Species(
+            particle_type='proton',
+            name='plasma_background',
+            initial_distribution=background_dist,
+        )
+
+        background_layout = picmi.PseudoRandomLayout(
+            grid=self.grid,
+            n_macroparticles_per_cell=2,  # low count, just enough for stability
+        )
+
+        self.sim.add_species(
+            background_i,
+            layout=background_layout,
+        )
+
+        # NOTE: I don't want to track these, but these need to be noted in the report if this works
+        #self.species_added = background_i
+
     def add_flux_planes(self):
 
         if not hasattr(self, "species_added"):
@@ -548,7 +622,7 @@ class PollywellSixCoilHybrid:
 
         vi_rms = np.sqrt(self.Ti_J / self.M)
         # 1%, scale up over time as see fit
-        flux_value = self.v_ion * self.p_density
+        flux_value = (1/3) * self.v_ion * self.p_density
 
         n_target = self.B_coil**2 / (2 * MU0 * self.Ti_J)
         t_fill = n_target / (3 * flux_value)  # rough fill time, factor of three due to 3-plane injection
@@ -723,8 +797,7 @@ class PollywellSixCoilHybrid:
 
     def add_diagnostics(self):
         # NOTE: Unused and diagnostics are set for every step
-        self.diag_period = max(1, self.max_steps // 200)
-        self.diag_period = 1
+        self.diag_period = max(1, self.max_steps // 100)
 
         # Field diagnostic: B-field components + electron fluid quantities.
         # 'rho' is the ion charge density (from particle deposition).
@@ -739,7 +812,8 @@ class PollywellSixCoilHybrid:
                     "Ex", "Ey", "Ez",
                     "Bx_fp_external", "By_fp_external", "Bz_fp_external",
                     "Ex_fp_external", "Ey_fp_external", "Ez_fp_external",
-                    "Jx", "Jy", "Jz", "part_per_cell", "rho"],
+                    "Jx", "Jy", "Jz", "part_per_cell", "rho",
+                    "eb_covered"],
             warpx_format='openpmd',
             warpx_openpmd_backend='h5',
         )
@@ -753,7 +827,17 @@ class PollywellSixCoilHybrid:
         part_diag = picmi.ParticleDiagnostic(
             name="part_diag",
             period=self.diag_period,
-            species=self.species_added,
+            species=[self.plasma_i],
+            data_list=["x", "y", "z", "ux", "uy", "uz", "weighting"],
+            warpx_format='openpmd',
+            warpx_openpmd_backend='h5',
+        )
+
+        # Boundary scraping diagnostics
+        scraping_diag = picmi.ParticleBoundaryScrapingDiagnostic(
+            name="boundary_scraping",
+            period=10,
+            species=[self.plasma_i],
             data_list=["x", "y", "z", "ux", "uy", "uz", "weighting"],
             warpx_format='openpmd',
             warpx_openpmd_backend='h5',
@@ -764,7 +848,6 @@ class PollywellSixCoilHybrid:
         # The decay curve N(t) -> exponential fit -> tau_sim.
         # We compare tau_sim across densities to extract the scaling exponent.
         # Output every step (cheap — just a scalar sum) for maximum time resolution.
-        # NOTE - this stopped working for some reason, but we can get particle counts in paraview using weights
         particle_num_reduced_diag = picmi.ReducedDiagnostic(
             diag_type="ParticleNumber",
             name="particle_count",
@@ -785,43 +868,40 @@ class PollywellSixCoilHybrid:
 
         self.sim.add_diagnostic(field_diag)
         self.sim.add_diagnostic(part_diag)
+        self.sim.add_diagnostic(scraping_diag)
         self.sim.add_diagnostic(field_energy_reduced_diag)
         self.sim.add_diagnostic(particle_energy_reduced_diag)
 
-    def add_injection_callback(self, inject_radius=None):
-        
-        inject_radius = inject_radius or 0.8 * (self.plasma_bounding * self.L) # more central than initial spawn
+    def add_injection_callback(self):
+        inject_radius = 3 * self.dx
         v_rms = np.sqrt(self.Ti_J / self.M)
         particle_container = self.sim.particles.get("plasma_i")
         df = particle_container.to_df(local=True)
-        # count_parts_at_t0 // 2 breaks around step 60
-        # count_parts_at_t0 // 4 breaks around step 122, clear changes in B-field
-        # count_parts_at_t0 // 8 runs completely, but no interesting changes in B-field
-
         # Get initial count of particles from their number density
-        spawn_volume = (4/3) * np.pi * (self.L * self.plasma_bounding)**3
-        macro_density = len(df['w']) / spawn_volume
-        N_inject_t0 = len(df['w'])
-        N_inject = int(N_inject_t0 * (inject_radius**3 / (self.plasma_bounding * self.L)**3))
-        print("ORIGINALLY INJECTED: ", {N_inject_t0})
-        print(f"GOING TO INJECT {N_inject} PARTICLES EVERY STEP, PRESERVING MACRO DENSITY = {macro_density}")
-        print(f"P_DENSITY OF SPAWN: {N_inject / ((4/3) * np.pi * inject_radius**3)}")
+        N_t0 = len(df['w'])
         # print(f"NEW RADIUS TO SPAWN: {scaled_down_r3:.6f}")
-        w = [df['w'].iloc[0]]*N_inject  # all particles same weight
+        weight = df['w'].iloc[0]  # all particles same weight
         # the quasi-spherical radius of our system = b_offset
         threshold_r = self.b_offset
         print("DONE GETTING INJECTION COUNTS")
+        # # approximate beta calculation to stop injection
+        n_target = self.B_coil**2 / (2*MU0*self.Ti_J)
+        V_sphere = 4/3 * np.pi * threshold_r**3
+        n_target_count = n_target * V_sphere / weight
         def inject_particles():
-            # # approximate beta calculation to stop injection
-            n_target = self.B_coil**2 / (2*MU0*self.Ti_J)
-            cur_df = self.sim.particles.get("plasma_i").to_df(local=True)
-            r2 = cur_df['x']**2 + cur_df['y']**2 + cur_df['z']**2
-            n_inner = (r2 < threshold_r**2).sum()
-            if n_inner > n_target:
+            particle_container_df = self.sim.particles.get("plasma_i").to_df(local=True)
+            r2 = particle_container_df['x']**2 + particle_container_df['y']**2 + particle_container_df['z']**2
+            n_current = (r2 < threshold_r**2).sum()
+            # spawn equal to amount lost in sphere
+            needed = N_t0 - n_current
+            N_inject = max(0, min(100, needed))
+            print("PARTICLES NEEDED: ", needed, " INJECTING: ", N_inject)
+            if n_current > n_target_count:
                 print("********************************")
                 print("WOOOOOT WE GOT ENOUGH PARTICLES NO MORE BUDDY NO MORE")
                 print("********************************")
                 return
+            w = np.array([weight]*N_inject)
             # uniform sphere sampling
             r = inject_radius * np.cbrt(np.random.uniform(0, 1, N_inject))
             theta = np.arccos(np.random.uniform(-1, 1, N_inject))
@@ -886,6 +966,8 @@ class PollywellSixCoilHybrid:
 
         self.run_dir = run_dir
         self.run_params = run_params
+        os.chdir(self.run_dir)
+        self.sim.write_input_file("inputs_test")
 
     def run(self):
         db = RunsDB()
@@ -908,5 +990,5 @@ class PollywellSixCoilHybrid:
 
 # python3.10 -u -m inputs.polywell_sim --test >> ./output/hybrid_run_logs/"run_log_$(date +%s).txt" 2>&1
 
-polywell = PollywellSixCoilHybrid(cfg, sim=simulation)
+polywell = PollywellSixCoilHybrid(cfg)
 polywell.run()
