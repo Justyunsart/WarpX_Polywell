@@ -234,9 +234,9 @@ class PollywellSixCoilHybrid:
             print(f"[WARNING] Plasma bounding spawns particles outside of reactor, re-scaling")
             # this ensures we spawn within the system, with a scaling factor to spawn closer to center
             # if no scaling, spawn at b_offset
-            new_plasma_bounding = 1/5 * (cfg.b_offset / cfg.L)
+            new_plasma_bounding = 0.5 * (cfg.b_offset / cfg.L)
             cfg.plasma_bounding = new_plasma_bounding
-            print(f"[new plasma bounding value] {cfg.plasma_bounding}")
+            print(f"[new plasma bounding value] {cfg.plasma_bounding}, spawning particles in central radius: {new_plasma_bounding * cfg.L}")
         self.plasma_bounding = cfg.plasma_bounding
         
         self.M = cfg.mass * M_P
@@ -797,7 +797,7 @@ class PollywellSixCoilHybrid:
 
     def add_diagnostics(self):
         # NOTE: Unused and diagnostics are set for every step
-        self.diag_period = max(1, self.max_steps // 100)
+        self.diag_period = max(1, self.max_steps // 200)
 
         # Field diagnostic: B-field components + electron fluid quantities.
         # 'rho' is the ion charge density (from particle deposition).
@@ -872,34 +872,74 @@ class PollywellSixCoilHybrid:
         self.sim.add_diagnostic(field_energy_reduced_diag)
         self.sim.add_diagnostic(particle_energy_reduced_diag)
 
+    def cusp_loss_count(self, pc):
+        total = 0.0
+        per_face = []
+        
+        faces = [
+            (0, +1), (0, -1),
+            (1, +1), (1, -1),
+            (2, +1), (2, -1),
+        ]
+        
+        for ax, sign in faces:
+            # get the coordinates for this slab slice
+            ax1, ax2 = (ax+1)%3, (ax+2)%3
+            # slab of width about sign * b_offset
+            face_center = sign * self.b_offset
+            loss = 0.0
+            
+            for pti in pc.iterator(pc, level=0):
+                x  = np.array(pti['x'], copy=False)
+                y  = np.array(pti['y'], copy=False)
+                z  = np.array(pti['z'], copy=False)
+                ux = np.array(pti['ux'], copy=False)
+                uy = np.array(pti['uy'], copy=False)
+                uz = np.array(pti['uz'], copy=False)
+                
+                coords = [x, y, z]
+                vels   = [ux, uy, uz]   
+                
+                # width of slab on axis, dx / 2 since it's width is dx
+                in_slab  = np.abs(coords[ax] - face_center) < self.dx / 2
+                # slice on perpendicular axes
+                # basically 
+                in_face  = (np.abs(coords[ax1]) < self.b_dia / 2) & \
+                        (np.abs(coords[ax2]) < self.b_dia / 2)
+                in_face = (coords[ax1]**2 + coords[ax2]**2 < (self.b_dia / 2)**2 )
+                # is it leaving?
+                outgoing = sign * vels[ax] > 0
+                # ensure we only capture particles that will be leaving the slab (no counting twice)
+                # if they're normal velocity and position imply they will leave after this time step
+                # calculate x value after time step using current normal velocity
+                next_pos = coords[ax] + vels[ax] * self.dt
+                # scale by sign so a single comparison operator works
+                # |next_pos| > |slab_end|
+                will_exit = sign * next_pos > sign * (face_center + sign * self.dx / 2)
+                mask = in_slab & in_face & outgoing & will_exit
+                loss += np.sum(mask)
+            
+            per_face.append(loss)
+            total += loss
+        
+        return int(round(total)), per_face
+
     def add_injection_callback(self):
-        inject_radius = 3 * self.dx
+        inject_radius = self.plasma_bounding * self.L
         v_rms = np.sqrt(self.Ti_J / self.M)
         particle_container = self.sim.particles.get("plasma_i")
+        _loss_log = {"times": [], "per_face": []}  # closure state
         df = particle_container.to_df(local=True)
-        # Get initial count of particles from their number density
-        N_t0 = len(df['w'])
-        # print(f"NEW RADIUS TO SPAWN: {scaled_down_r3:.6f}")
-        weight = df['w'].iloc[0]  # all particles same weight
-        # the quasi-spherical radius of our system = b_offset
-        threshold_r = self.b_offset
-        print("DONE GETTING INJECTION COUNTS")
-        # # approximate beta calculation to stop injection
-        n_target = self.B_coil**2 / (2*MU0*self.Ti_J)
-        V_sphere = 4/3 * np.pi * threshold_r**3
-        n_target_count = n_target * V_sphere / weight
+        weight = df['w'].iloc[0]
         def inject_particles():
-            particle_container_df = self.sim.particles.get("plasma_i").to_df(local=True)
-            r2 = particle_container_df['x']**2 + particle_container_df['y']**2 + particle_container_df['z']**2
-            n_current = (r2 < threshold_r**2).sum()
-            # spawn equal to amount lost in sphere
-            needed = N_t0 - n_current
-            N_inject = max(0, min(100, needed))
-            print("PARTICLES NEEDED: ", needed, " INJECTING: ", N_inject)
-            if n_current > n_target_count:
-                print("********************************")
-                print("WOOOOOT WE GOT ENOUGH PARTICLES NO MORE BUDDY NO MORE")
-                print("********************************")
+            lost, per_face = self.cusp_loss_count(particle_container)
+            # broke around 120 with full injections
+            N_inject = lost // 2
+            print("[injection callback] PARTICLES LOST THROUGH COIL CUSPS: ", lost, "\n[injection callback] INJECTING: ", N_inject)
+            _loss_log['times'].append(self.sim.extension.warpx.gett_new(0))
+            _loss_log['per_face'].append(per_face)
+            # simply return if nothing to add back in
+            if N_inject == 0:
                 return
             w = np.array([weight]*N_inject)
             # uniform sphere sampling
@@ -923,7 +963,14 @@ class PollywellSixCoilHybrid:
                 unique_particles=False,
             )
 
-        callbacks.installafterstep(inject_particles)
+        def save_cusp_losses():
+            np.savez("diags/cusp_flux.npz",
+                    times=np.array(_loss_log["times"]),
+                    losses=np.array(_loss_log["per_face"]),
+                    face_labels=["x_hi","x_lo","y_hi","y_lo","z_hi","z_lo"])
+
+        callbacks.installcallback('afterstep',inject_particles)
+        callbacks.installcallback('afterdiagnostics', save_cusp_losses)
 
         print("[injection callback] ADDED CALLBACK TO INJECT PARTICLES")
 
