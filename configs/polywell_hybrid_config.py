@@ -1,27 +1,9 @@
 """
-A polywell dataclass that handles initialization via a separate class that
-includes all relevant parameters in the experiments.
+A polywell dataclass that handles initialization of relevant simulation parameters
 
-Example:
+Provided at the bottom is HYBRID_CONFIG
 
-# configs/my_run.py
-from inputs.config import PolywellConfig
-
-cfg = PolywellConfig(
-    p_density = 1e21,
-    N         = 32,
-    I         = 8e6,
-)
-
-polywell = PollywellSixCoil(cfg=cfg)
-
-# Production run
-cfg = PolywellConfig(p_density=1e21, N=24, I=8e6)
-polywell = PollywellSixCoil(cfg=cfg)
-polywell.run()
-
-polywell = PollywellSixCoil(cfg=cfg)
-polywell.run()
+This is the base config being used to run simulations at the moment.
 """
 
 VALID_SYMMETRIES = ("full", "octant")
