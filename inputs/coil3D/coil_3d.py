@@ -1,3 +1,9 @@
+"""
+Stability issues, trying a smaller timestep to determine if it remains the point of plasma-coil contact
+
+
+"""
+
 import numpy as np
 import scipy.constants as sc
 from pywarpx import picmi, warpx
@@ -27,6 +33,7 @@ class SingleCoil3DConfig:
     dia:        float = 0.5        # m
 
     # Grid
+    # Increasing L softens coil B-field anomaly (eps = dx = L / N)
     L:          float = 2.5        # m (half-extent, all axes)
     N:          int   = 64         # cells per axis
 
@@ -64,6 +71,8 @@ class SingleCoil3DConfig:
 
         # On-axis B for a circular loop: B_x(r) = mu0*I*R^2 / (2*(R^2+r^2)^(3/2))
         # Solve P_ram = B^2 / (2*mu0) numerically for r_CF
+        # sqrt(P_ram * 2 * mu0) = B
+        # sqrt(P_ram * 2 * MU0) = MU0 * I * R^2 / 2 * (R^2 +)
         self.r_CF = np.sqrt((MU0 * self.I * self.R_coil**2 / (2 * np.sqrt(2 * MU0 * self.P_ram)))**(2/3) - self.R_coil**2)
         if self.r_CF < 0 or not np.isreal(self.r_CF):
             raise ValueError(f"r_CF is imaginary — P_ram too large for coil to stand off the flow. Increase I or reduce n_stream/v_drift.")
@@ -98,6 +107,19 @@ class SingleCoil3DConfig:
         else:
             print(f"r_CF / Lx   = {self.r_CF/self.L:.2f}     (standoff inside domain)")
 
+        v_A_ref = self.B_ref / np.sqrt(sc.mu_0 * self.n_floor * self.m_i)
+        v_A_peak = 0.25 / np.sqrt(sc.mu_0 * self.n_floor * self.m_i)
+        print(v_A_ref, (v_A_ref * self.dt / 100) / self.dx, (v_A_peak * self.dt / 100) / self.dx)
+
+        eta_H_max = sc.mu_0 * self.dx**2 / self.dt
+        print(f"eta_H_max = {eta_H_max:.3e}")
+
+        ratio = self.eta_H / (self.eta_bg * self.dx**2)
+        print(f"eta_H / (eta_bg * dx²) = {ratio:.3e}")
+
+        eta_bg_balanced = self.eta_H / self.dx**2
+        print(f"balanced eta_bg = {eta_bg_balanced:.3e}")
+
 cfg = SingleCoil3DConfig()
 
 grid = picmi.Cartesian3DGrid(
@@ -108,7 +130,7 @@ grid = picmi.Cartesian3DGrid(
     upper_boundary_conditions=["neumann"]*3,
     lower_boundary_conditions_particles=["absorbing"]*3,
     upper_boundary_conditions_particles=["absorbing"]*3,
-    warpx_max_grid_size=16,
+    warpx_max_grid_size=32,
 )
 
 import src.bext.analytic as analytic
@@ -122,11 +144,11 @@ solver = picmi.HybridPICSolver(
     Te=cfg.T_e_eV,
     n0=cfg.n_stream,
     gamma=5.0/3.0,
-    n_floor=0.1 * cfg.n_stream,                 # 5% of upstream — caps 1/n amplification in the deepening cavity
+    n_floor=cfg.n_floor,                 # 10% of upstream — caps 1/n amplification in the deepening cavity
     plasma_resistivity=cfg.eta_bg,               # uniform; coil islands emulated via callback
-    plasma_hyper_resistivity=3.0e-4,         # Ohm·m^3; overdamps grid-Nyquist whistlers at peak |B|~0.13T
+    plasma_hyper_resistivity=cfg.eta_H,         # Ohm·m^3; overdamps grid-Nyquist whistlers at peak |B|~0.13T
     holmstrom_vacuum_region=True,            # suppress Hall/pressure terms in the cavity
-    substeps=100,                           # dt_sub ≈ 3e-11 s; clears whistler CFL at peak |B| with ~3x margin
+    substeps=cfg.substeps,                           # dt_sub ≈ 3e-11 s; clears whistler CFL at peak |B| with ~3x margin
     A_external=A_external,
     do_external_diva_cleaning=False,         # A is analytically div-free
 )
@@ -174,7 +196,7 @@ field_diag = picmi.FieldDiagnostic(
     grid=grid,
     period=PERIOD,
     data_list=["Ex", "Ey", "Ez", "Bx", "By", "Bz",
-                "rho_stream_i"],
+                "rho_stream_i", "rho_background_i"],
     warpx_format="openpmd",
     warpx_openpmd_backend="h5",
 )
@@ -209,6 +231,7 @@ particle_energy_reduced_diag = picmi.ReducedDiagnostic(
     period=1
 )
 
+# CHANGED: Added filtering to smooth currents with a binomial filter 2-pass
 warpx.const_dt = cfg.dt
 sim = picmi.Simulation(
     solver=solver,
@@ -225,31 +248,36 @@ sim.add_diagnostic(scraping_diag)
 sim.add_diagnostic(field_energy_reduced_diag)
 sim.add_diagnostic(particle_energy_reduced_diag)
 
-from pywarpx.callbacks import installafterdeposition
+#from pywarpx.callbacks import installbeforeesolve
+from pywarpx.callbacks import installafterdeposition, installbeforeEsolve
 
 _coil_damp_mask = {}
 
 def damp_current_at_coils():
-    Direction = sim.extension.libwarpx_so.Direction
-    contrast = cfg.eta_coil / cfg.eta_bg
-    for idir in (0, 1, 2):
-        mf = sim.fields.get("current_fp", dir=Direction(idir), level=0)
-        factor = _coil_damp_mask.get(idir)
-        if factor is None:
-            xs = mf.mesh("x")
-            ys = mf.mesh("y")
-            zs = mf.mesh("z")
-            X = xs[:, None, None]
-            Y = ys[None, :, None]
-            Z = zs[None, None, :]
-            # squared distance from each grid point to the coil ring wire
-            # ring at x=0, radius R_coil in the y-z plane
-            d2 = X**2 + (np.sqrt(Y**2 + Z**2) - cfg.R_coil)**2
-            g = np.exp(-d2 / cfg.dx**2)
-            factor = 1.0 / (1.0 + contrast * g)
-            _coil_damp_mask[idir] = factor
-        arr = mf[:, :, :]
-        mf[:, :, :] = arr * factor
+    try:
+        Direction = sim.extension.libwarpx_so.Direction
+        contrast = cfg.eta_coil / cfg.eta_bg
+        for idir in (0, 1, 2):
+            mf = sim.fields.get("current_fp", dir=Direction(idir), level=0)
+            factor = _coil_damp_mask.get(idir)
+            if factor is None:
+                xs = mf.mesh("x")
+                ys = mf.mesh("y")
+                zs = mf.mesh("z")
+                X = xs[:, None, None]
+                Y = ys[None, :, None]
+                Z = zs[None, None, :]
+                d2 = X**2 + (np.sqrt(Y**2 + Z**2) - cfg.R_coil)**2
+                g = np.exp(-d2 / cfg.dx**2)
+                factor = 1.0 / (1.0 + contrast * g)
+                _coil_damp_mask[idir] = factor
+                print(f"[coil J] dir {idir}: factor.min = {factor.min():.3e} (cached)")
+            arr = mf[...]
+            fac = factor.reshape(arr.shape[:3] + (1,) * (arr.ndim - 3))
+            mf[...] = arr * fac
+    except Exception as e:
+        print(f"[damp_current_at_coils] ERROR: {e}")
+        raise
 
 installafterdeposition(damp_current_at_coils)
 
@@ -278,6 +306,7 @@ def count_coil_flux():
         if mask.any():
             vm = vx[mask]; wm = wt[mask]
             neg = vm < 0
+            # _slab_L = dx = 7.8cm
             rminus += float(np.sum(wm[neg]  * -vm[neg]))  / _slab_L
             rplus  += float(np.sum(wm[~neg] *  vm[~neg])) / _slab_L
 
