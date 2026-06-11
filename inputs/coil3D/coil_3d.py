@@ -107,8 +107,6 @@ class SingleCoil3DConfig:
         else:
             print(f"r_CF / Lx   = {self.r_CF/self.L:.2f}     (standoff inside domain)")
 
-        exit()
-
 cfg = SingleCoil3DConfig()
 
 grid = picmi.Cartesian3DGrid(
