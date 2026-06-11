@@ -17,7 +17,7 @@ M_E  = sc.m_e
 EV   = sc.eV
 MU0  = 4 * np.pi * 1e-7
 EPS0 = sc.epsilon_0
-MAX_STEPS = 1000
+MAX_STEPS = 1
 
 @dataclass
 class SingleCoil3DConfig:
@@ -40,7 +40,7 @@ class SingleCoil3DConfig:
     # Numerical stability (mirrors coil_2d.py)
     eta_bg:     float = 1.0e-7     # background resistivity (Ohm·m)
     eta_coil:   float = 1.0e3      # coil island resistivity (Ohm·m)
-    eta_H:      float = 3.0e-3     # hyper-resistivity (Ohm·m^3)
+    eta_H:      float = 9.0e-4     # hyper-resistivity (Ohm·m^3)
     n_floor_frac: float = 0.05     # n_floor as fraction of n_stream
     substeps:   int   = 100        # B-field substeps
 
@@ -319,6 +319,8 @@ import os
 import time
 
 os.chdir('./inputs/coil3D')
-os.makedirs(f"diags_{time.time()}", exist_ok=True)
+new_run_dir = f"runs_{time.time()}"
+os.makedirs(new_run_dir, exist_ok=True)
+os.chdir(new_run_dir)
 
 sim.step()
