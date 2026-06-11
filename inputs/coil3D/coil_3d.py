@@ -316,8 +316,9 @@ from pywarpx.callbacks import installafterdiagnostics
 installafterdiagnostics(save_cusp_losses)
 
 import os
+import time
 
-os.chdir('/Users/hehe/Documents/plasma_research/warpx/WarpX_Polywell/inputs/coil3D')
-os.makedirs("diags", exist_ok=True)
+os.chdir('./inputs/coil3D')
+os.makedirs(f"diags_{time.time()}", exist_ok=True)
 
 sim.step()
