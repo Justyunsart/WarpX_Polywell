@@ -107,18 +107,7 @@ class SingleCoil3DConfig:
         else:
             print(f"r_CF / Lx   = {self.r_CF/self.L:.2f}     (standoff inside domain)")
 
-        v_A_ref = self.B_ref / np.sqrt(sc.mu_0 * self.n_floor * self.m_i)
-        v_A_peak = 0.25 / np.sqrt(sc.mu_0 * self.n_floor * self.m_i)
-        print(v_A_ref, (v_A_ref * self.dt / 100) / self.dx, (v_A_peak * self.dt / 100) / self.dx)
-
-        eta_H_max = sc.mu_0 * self.dx**2 / self.dt
-        print(f"eta_H_max = {eta_H_max:.3e}")
-
-        ratio = self.eta_H / (self.eta_bg * self.dx**2)
-        print(f"eta_H / (eta_bg * dx²) = {ratio:.3e}")
-
-        eta_bg_balanced = self.eta_H / self.dx**2
-        print(f"balanced eta_bg = {eta_bg_balanced:.3e}")
+        exit()
 
 cfg = SingleCoil3DConfig()
 
