@@ -15,7 +15,7 @@ Convention note:
   So: ellipk(m) ↔ comp_ellint_1(sqrt(m))
 
 Usage (analytic mode):
-    from src.bext.analytic import build_bext_expressions
+    from warpx_polywell.bext.analytic import build_bext_expressions
 
     exprs = build_bext_expressions(I=1e6, dia=1.0, offset=1.1)
     # exprs['Bx'], exprs['By'], exprs['Bz'] are parser-ready strings

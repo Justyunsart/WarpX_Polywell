@@ -12,7 +12,7 @@ VALID_SOLVERS = ("EM", "hybrid")
 VALID_B_METHODS = ("file", "analytic")
 
 from dataclasses import dataclass, field
-from src.domain import Domain, derive_domain
+from warpx_polywell.domain import Domain, derive_domain
 import scipy.constants as sc
 import numpy as np
 

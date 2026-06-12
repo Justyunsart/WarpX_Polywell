@@ -5,12 +5,12 @@ from pywarpx import picmi, warpx, particles
 # PICMI's BC_map has no entry for WarpX's native "pmc" boundary; register a
 # passthrough so octant-symmetry planes (tangential B = 0, normal E = 0) work.
 picmi.BC_map["pmc"] = "pmc"
-from src.bext.bext import setup_bext, make_bext_file
-from src.eext.eext import fill_eext_file # should run AFTER B-field init.
-from src.eext.methods import EMethods # enum registry for available methods
-from src.db.runs import RunsDB, new_run_dir
-from src.domain import derive_domain, plasma_bounds, VALID_SYMMETRIES
-from src.spawn import make_layout, VALID_PARTICLE_MODES
+from warpx_polywell.bext.bext import setup_bext, make_bext_file
+from warpx_polywell.eext.eext import fill_eext_file # should run AFTER B-field init.
+from warpx_polywell.eext.methods import EMethods # enum registry for available methods
+from warpx_polywell.db.runs import RunsDB, new_run_dir
+from warpx_polywell.domain import derive_domain, plasma_bounds, VALID_SYMMETRIES
+from warpx_polywell.spawn import make_layout, VALID_PARTICLE_MODES
 import numpy as np
 import scipy.constants as sc
 

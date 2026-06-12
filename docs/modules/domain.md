@@ -1,4 +1,4 @@
-# `src/domain.py` — Simulated-Domain Spec & Symmetry Reduction
+# `src/warpx_polywell/domain.py` — Simulated-Domain Spec & Symmetry Reduction
 
 A single frozen dataclass collapses every difference between full-domain and octant-symmetry runs into one object. Downstream code (grid construction, field-file generation, particle loading) reads from `Domain` and never branches on the `symmetry` toggle directly.
 

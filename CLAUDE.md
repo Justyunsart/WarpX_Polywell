@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-A WarpX particle-in-cell (PIC) simulation harness for a polywell fusion configuration. This is a single-driver project, not a library: `inputs/polywell_input.py` is the entry-point driver and `src/` contains the field-generation, storage, and run-tracking machinery it depends on. Detailed architecture lives in `docs/`; on-demand per-script guidance is in `.claude/rules/scripts.md`.
+A WarpX particle-in-cell (PIC) simulation harness for a polywell fusion configuration. This is a single-driver project: `inputs/polywell_input.py` is the entry-point driver, and the `warpx_polywell` package (under `src/`, installed via `poetry install`) contains the field-generation, storage, and run-tracking machinery it depends on. Detailed architecture lives in `docs/`; on-demand per-script guidance is in `.claude/rules/scripts.md`.
 
 ## Tech stack
 
@@ -16,14 +16,15 @@ A WarpX particle-in-cell (PIC) simulation harness for a polywell fusion configur
 - **h5py + openPMD** — HDF5 I/O for external field files and diagnostics
 - **SQLite** (stdlib `sqlite3`) — `output/runs.db` run registry
 - **MPI** (via `mpirun`) — parallel execution
-- No `pyproject.toml` / `requirements.txt` / `setup.py` — env is conda-defined via `setup.sh`.
+- **Poetry** — packaging/dependency management. The `warpx_polywell` package is defined in `pyproject.toml` (poetry-core, src-layout) and installed editable with `poetry install`. The conda env (`setup.sh`) still provides the compiled `pywarpx`/`pyamrex` stack, which is not pip-installable.
 
 ## Repo layout
 
 ```
 .
 ├── inputs/         # Entry-point driver script(s)
-├── src/            # Library modules: domain, spawn, bext, eext, db, utils
+├── src/            # Poetry src-layout root
+│   └── warpx_polywell/   # Importable package: domain, spawn, bext, eext, db, utils
 ├── docs/           # In-tree documentation (start at docs/README.md)
 ├── tests/          # Jupyter notebooks + notebook-builder scripts
 ├── output/         # Per-run output, cached field files, runs.db (gitignored)
@@ -39,22 +40,25 @@ A WarpX particle-in-cell (PIC) simulation harness for a polywell fusion configur
 ./setup.sh                          # add --force to recreate, --dry-run to preview
 conda activate warpx-env
 
-# Run a simulation — MUST launch from project root so `from src.*` resolves
+# Install the warpx_polywell package (editable) into the active env
+poetry install                      # makes `import warpx_polywell` resolve from anywhere
+
+# Run a simulation — launch from project root so output/ resolves next to the repo
 python inputs/polywell_input.py
 mpirun -n 8 python inputs/polywell_input.py   # parallel; cells/axis must divide rank count
 
 # Query the runs database (output/runs.db)
-python -m src.db.runs list                              # most recent
-python -m src.db.runs list status=completed b_method=analytic
-python -m src.db.runs get <id>
-python -m src.db.runs scan                              # backfill existing run dirs
+python -m warpx_polywell.db.runs list                              # most recent
+python -m warpx_polywell.db.runs list status=completed b_method=analytic
+python -m warpx_polywell.db.runs get <id>
+python -m warpx_polywell.db.runs scan                              # backfill existing run dirs
 ```
 
 No test runner or linter is configured. Validation notebooks under `tests/` run interactively.
 
 ## Project-wide conventions
 
-- **Always run from the project root.** `from src.* import ...` requires the repo root on `sys.path`.
+- **`warpx_polywell` is an installed package.** After `poetry install`, `from warpx_polywell.* import ...` resolves from any directory — the repo root no longer needs to be on `sys.path`. Output still lands under the repo because `ROOT_DIR` is derived from the package's `__file__`, not the cwd; re-run `poetry install` if you move the package.
 - **Don't commit secrets.** `.env` (storage backend config) is gitignored; check before staging.
 - **Heavy compute is rank-0 only.** Field-file generation (magpylib, E-field integration) runs serially before `sim.step()`; only the WarpX PIC advance is parallel.
 - **Cache filenames are the cache key.** `output/bext/*.h5` names encode every parameter — changing any parameter produces a new file. Don't rename or hand-edit.

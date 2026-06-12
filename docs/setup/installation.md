@@ -61,17 +61,25 @@ print("All imports OK")
 
 ---
 
-## 5. Clone / Open the Project
+## 5. Clone / Open the Project & Install the Package
 
-The project root is expected to be the working directory when running any script:
+The simulation code lives in the `warpx_polywell` package under `src/`. Install it (editable) into
+the active conda env with Poetry so imports resolve from anywhere:
 
 ```bash
 cd /path/to/WarpX
-python inputs/polywell_input.py
+poetry install
 ```
 
-Imports like `from src.bext.bext import make_bext_file` rely on the project root being on
-`sys.path`. If you run scripts from a subdirectory, you will get `ModuleNotFoundError`.
+This makes imports like `from warpx_polywell.bext.bext import make_bext_file` work regardless of the
+working directory. (Poetry installs only the pure-Python deps; the compiled `pywarpx`/`pyamrex` stack
+still comes from conda — see steps 2–3.)
+
+Run the driver from the project root so generated output lands next to the repo:
+
+```bash
+python inputs/polywell_input.py
+```
 
 ---
 
@@ -88,8 +96,9 @@ Imports like `from src.bext.bext import make_bext_file` rely on the project root
 
 ## Troubleshooting
 
-**`ModuleNotFoundError: No module named 'src'`**
-Run the script from the project root, not from inside `inputs/` or `src/`.
+**`ModuleNotFoundError: No module named 'warpx_polywell'`**
+The package isn't installed in the active env. Run `poetry install` from the project root (with
+`warpx-env` activated).
 
 **`ValueError: N must be divisible by number of MPI ranks`**
 Change `N` in `polywell_input.py` to a value divisible by your MPI rank count.

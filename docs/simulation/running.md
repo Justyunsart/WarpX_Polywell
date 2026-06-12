@@ -20,9 +20,9 @@ polywell_input.py
 ├── 1. Read user parameters (incl. `symmetry`, `particle_mode`, `n_test_particles`)
 │
 ├── 2. Derive simulated-domain spec
-│   ├── domain = derive_domain(symmetry, L, N)     [src/domain.py]
+│   ├── domain = derive_domain(symmetry, L, N)     [src/warpx_polywell/domain.py]
 │   │   → Domain dataclass: bounds, n_cells, field/particle BCs
-│   └── layout = make_layout(particle_mode, …)     [src/spawn.py]
+│   └── layout = make_layout(particle_mode, …)     [src/warpx_polywell/spawn.py]
 │       → picmi.GriddedLayout or picmi.PseudoRandomLayout
 │
 ├── 3. Build WarpX objects (all read from `domain`)
@@ -137,7 +137,7 @@ The E-field integration also prints progress every 10% of grid points:
 
 | Symptom | Likely Cause | Fix |
 |---|---|---|
-| `ModuleNotFoundError: src` | Not running from project root | `cd /path/to/WarpX` |
+| `ModuleNotFoundError: warpx_polywell` | Package not installed in active env | `poetry install` (with `warpx-env` active) |
 | WarpX MPI domain error | `N` not divisible by rank count | Adjust `N` or change rank count |
 | Very slow startup | E-field being computed from scratch | Wait, or pre-generate the file; will be cached after |
 | Divergence cleaning crash | `do_initial_div_cleaning = 1` | Keep it `0` with open BCs |

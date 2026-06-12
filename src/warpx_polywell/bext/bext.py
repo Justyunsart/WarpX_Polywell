@@ -7,13 +7,13 @@ Supports two pipelines, selectable via setup_bext():
   - "analytic" : Generate parser expression strings from the exact elliptic-integral
                   solution, and tell WarpX to parse_B_ext_particle_function. No grid file needed.
 """
-from src.bext.make_collection import make_polywell_collection
-from src.bext.analytic import build_bext_expressions
-from src.domain import Domain
+from warpx_polywell.bext.make_collection import make_polywell_collection
+from warpx_polywell.bext.analytic import build_bext_expressions
+from warpx_polywell.domain import Domain
 import h5py
 import numpy as np
 from datetime import datetime
-from src.utils.storage import get_backend
+from warpx_polywell.utils.storage import get_backend
 
 
 # ================================================================
@@ -257,7 +257,7 @@ def _compute_b_via_potentials(I, dia, offset, domain):
     Ax, Ay, Az : the vector potential itself (T·m = Wb/m)
     spacing    : list [dx, dy, dz] (m)
     """
-    from src.bext.vector_potential import converge_A_grid, curl_A
+    from warpx_polywell.bext.vector_potential import converge_A_grid, curl_A
 
     collection = make_polywell_collection(I, dia, offset)
     Ax, Ay, Az, spacing, pad = converge_A_grid(

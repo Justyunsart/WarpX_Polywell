@@ -21,7 +21,7 @@ Output:
 - Optionally E = -∇φ via central differences (np.gradient).
 
 Usage:
-    from src.eext.potential import compute_phi_grid, compute_E_from_phi
+    from warpx_polywell.eext.potential import compute_phi_grid, compute_E_from_phi
     phi, dx = compute_phi_grid(Q=1e-9, dia=0.75, offset=1.1, domain=domain)
     Ex, Ey, Ez = compute_E_from_phi(phi, dx)
 """
@@ -29,7 +29,7 @@ import numpy as np
 import scipy.constants as sc
 from scipy.special import ellipk
 
-from src.bext.make_collection import make_polywell_collection
+from warpx_polywell.bext.make_collection import make_polywell_collection
 
 
 # ----------------------------------------------------------------------
@@ -115,7 +115,7 @@ if __name__ == "__main__":
     on-axis sanity values, and plot φ + |E| on the z = 0 mid-plane.
     """
     import matplotlib.pyplot as plt
-    from src.domain import derive_domain
+    from warpx_polywell.domain import derive_domain
 
     domain = derive_domain("full", L=2.0, N=64)
     Q, dia, offset = 1e-9, 0.75, 1.1

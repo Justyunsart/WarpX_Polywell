@@ -1,4 +1,4 @@
-# `src/bext` — External B-field Module
+# `src/warpx_polywell/bext` — External B-field Module
 
 Provides the external magnetic field for WarpX polywell simulations. Supports
 three modes selectable at runtime: a **file-based** pipeline (pre-computed B
@@ -16,10 +16,10 @@ conceptual background, physics, and user guide.
 
 | File | Purpose |
 |---|---|
-| `src/bext/bext.py` | `setup_bext()` dispatcher + file-based HDF5 creation + Hybrid-PIC `external_vector_potential` wiring |
-| `src/bext/analytic.py` | Analytic elliptic-integral kernel (NumPy + AMReX parser expressions) |
-| `src/bext/vector_potential.py` | A via Coulomb-gauge FFT curl-inverse on a zero-padded grid (potentials overlay; required for Hybrid-PIC) |
-| `src/bext/make_collection.py` | Builds the magpylib coil geometry (file mode only) |
+| `src/warpx_polywell/bext/bext.py` | `setup_bext()` dispatcher + file-based HDF5 creation + Hybrid-PIC `external_vector_potential` wiring |
+| `src/warpx_polywell/bext/analytic.py` | Analytic elliptic-integral kernel (NumPy + AMReX parser expressions) |
+| `src/warpx_polywell/bext/vector_potential.py` | A via Coulomb-gauge FFT curl-inverse on a zero-padded grid (potentials overlay; required for Hybrid-PIC) |
+| `src/warpx_polywell/bext/make_collection.py` | Builds the magpylib coil geometry (file mode only) |
 
 ---
 
@@ -72,13 +72,13 @@ Parameters:
     particles      : pywarpx.particles module
     warpx_module   : pywarpx.warpx module (optional)
     I, dia, offset : coil parameters
-    domain         : src.domain.Domain — simulated-domain spec
+    domain         : warpx_polywell.domain.Domain — simulated-domain spec
                      (required for "file" mode; ignored by "analytic")
     solver         : "hybrid" or None — when "hybrid", forces use_potentials=True
                      and wires `external_vector_potential.*` ParmParse keys
                      so WarpX reads A from the generated openPMD file
     use_potentials : bool — if True, the file pipeline computes A via
-                     Coulomb-gauge FFT curl-inverse (src.bext.vector_potential)
+                     Coulomb-gauge FFT curl-inverse (warpx_polywell.bext.vector_potential)
                      and derives B = ∇×A instead of taking B directly from
                      magpylib. Generated filename carries a `_potentials` tag
                      so caches from the two pipelines never collide. Ignored
@@ -105,7 +105,7 @@ Returns the expected filename for a given set of parameters. Used to check for c
 
 ```python
 # Example — default (magpylib-direct B)
-from src.domain import derive_domain
+from warpx_polywell.domain import derive_domain
 d = derive_domain("full", 2, 72)
 name = get_bext_file_name(1e6, 1.0, 1.1, d)
 # → "B_ext_I-1000000.0A_D-1m_Off-1.1m_L-2m_N-72_sym-full.h5"
@@ -129,7 +129,7 @@ Parameters:
     I              : float            — coil current (A)
     dia            : float            — coil diameter (m)
     offset         : float            — coil center distance from origin (m)
-    domain         : src.domain.Domain — simulated-domain spec
+    domain         : warpx_polywell.domain.Domain — simulated-domain spec
     use_potentials : bool             — if True, build B via FFT curl-inverse
                                         of A (see _compute_b_via_potentials)
                                         instead of taking B directly from

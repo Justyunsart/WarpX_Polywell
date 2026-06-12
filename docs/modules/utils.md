@@ -1,4 +1,4 @@
-# `src/utils` — Utilities Module
+# `src/warpx_polywell/utils` — Utilities Module
 
 Lightweight helpers used across the codebase for coordinate conversion and path management.
 
@@ -8,14 +8,14 @@ Lightweight helpers used across the codebase for coordinate conversion and path 
 
 | File | Purpose |
 |---|---|
-| `src/utils/cyl.py` | Cartesian ↔ Cylindrical coordinate conversion |
-| `src/utils/paths.py` | Centralised path constants |
+| `src/warpx_polywell/utils/cyl.py` | Cartesian ↔ Cylindrical coordinate conversion |
+| `src/warpx_polywell/utils/paths.py` | Centralised path constants |
 
 ---
 
 ## `cyl.py`
 
-Used by `src/eext/eext.py` to convert field vectors between coordinate systems
+Used by `src/warpx_polywell/eext/eext.py` to convert field vectors between coordinate systems
 when applying coil-local frames.
 
 ### `toCyl(coord)` → `ndarray([r, φ, z])`
@@ -64,7 +64,7 @@ so all scripts find the correct directories regardless of where they are invoked
 ```python
 from pathlib import Path
 
-_script_dir = Path(__file__).resolve().parent   # → .../src/utils/
+_script_dir = Path(__file__).resolve().parent   # → .../src/warpx_polywell/utils/
 ROOT_DIR    = _script_dir.parent.parent          # → .../WarpX/
 
 BEXT_DIR    = ROOT_DIR / "output" / "bext"      # → .../WarpX/output/bext/
@@ -75,7 +75,7 @@ BEXT_DIR    = ROOT_DIR / "output" / "bext"      # → .../WarpX/output/bext/
 | Name | Value (relative to project root) | Used by |
 |---|---|---|
 | `ROOT_DIR` | `.` (project root) | `BEXT_DIR` derivation |
-| `BEXT_DIR` | `output/bext/` | `src/bext/bext.py` — where `.h5` field files are stored |
+| `BEXT_DIR` | `output/bext/` | `src/warpx_polywell/bext/bext.py` — where `.h5` field files are stored |
 
 ### Adding New Paths
 
@@ -89,5 +89,5 @@ NEW_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)  # optional auto-creation
 Then import it wherever needed:
 
 ```python
-from src.utils.paths import NEW_OUTPUT_DIR
+from warpx_polywell.utils.paths import NEW_OUTPUT_DIR
 ```

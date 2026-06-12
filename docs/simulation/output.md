@@ -129,6 +129,6 @@ x, y, z, ux  = ts.get_particle(["x", "y", "z", "ux"], species="plasma_i", iterat
 
 ## Post-Processing
 
-`src/post/reader.py` is a placeholder for post-processing utilities.
+`src/warpx_polywell/post/reader.py` is a placeholder for post-processing utilities.
 It is currently empty. Analysis should be done directly via the notebooks in `tests/`
 or custom scripts using `h5py` / `openpmd_viewer`.

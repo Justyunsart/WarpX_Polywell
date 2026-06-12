@@ -14,9 +14,9 @@
 4. [Running a Simulation](#4-running-a-simulation)
 5. [Input Parameters Reference](#5-input-parameters-reference)
 6. [Output Files](#6-output-files)
-7. [Module: `src/bext`](#7-module-srcbext)
-8. [Module: `src/eext`](#8-module-srceext)
-9. [Module: `src/utils`](#9-module-srcutils)
+7. [Module: `src/warpx_polywell/bext`](#7-module-srcwarpx_polywellbext)
+8. [Module: `src/warpx_polywell/eext`](#8-module-srcwarpx_polywelleext)
+9. [Module: `src/warpx_polywell/utils`](#9-module-srcwarpx_polywellutils)
 10. [Physics Background: Polywell Fusion](#10-physics-background-polywell-fusion)
 
 ---
@@ -106,7 +106,7 @@ print("All imports OK")
 
 | Symptom | Fix |
 |---|---|
-| `ModuleNotFoundError: No module named 'src'` | Run from project root: `cd /path/to/WarpX` |
+| `ModuleNotFoundError: No module named 'warpx_polywell'` | Install the package: `poetry install` (with `warpx-env` active) |
 | MPI domain decomposition error | `N` must be divisible by rank count. Default `N=72` is divisible by 1,2,3,4,6,8,9,12... |
 | Divergence cleaning crash at startup | Keep `warpx.do_initial_div_cleaning = 0` |
 
@@ -142,17 +142,18 @@ WarpX/
 │       └── *.h5
 │
 ├── src/
-│   ├── bext/
-│   │   ├── bext.py                # B-field HDF5 generation
-│   │   └── make_collection.py     # magpylib coil geometry
-│   ├── eext/
-│   │   ├── eext.py                # E-field HDF5 population
-│   │   └── methods.py             # Analytic E-field methods + EMethods enum
-│   ├── post/
-│   │   └── reader.py              # Post-processing placeholder (empty)
-│   └── utils/
-│       ├── cyl.py                 # Cartesian ↔ Cylindrical coordinate conversion
-│       └── paths.py               # ROOT_DIR and BEXT_DIR path constants
+│   └── warpx_polywell/            # Importable package (poetry src-layout)
+│       ├── bext/
+│       │   ├── bext.py            # B-field HDF5 generation
+│       │   └── make_collection.py # magpylib coil geometry
+│       ├── eext/
+│       │   ├── eext.py            # E-field HDF5 population
+│       │   └── methods.py         # Analytic E-field methods + EMethods enum
+│       ├── post/
+│       │   └── reader.py          # Post-processing placeholder (empty)
+│       └── utils/
+│           ├── cyl.py             # Cartesian ↔ Cylindrical coordinate conversion
+│           └── paths.py           # ROOT_DIR and BEXT_DIR path constants
 │
 └── tests/                         # Jupyter notebooks for exploration
     ├── input_fields.ipynb
@@ -165,12 +166,12 @@ WarpX/
 | File | Role |
 |---|---|
 | `inputs/polywell_input.py` | Entry point. Contains all user parameters. Orchestrates field file generation, WarpX setup, and `sim.step()`. |
-| `src/bext/bext.py` | Computes 3D B-field grid from polywell coils via magpylib; writes openPMD HDF5. |
-| `src/bext/make_collection.py` | Builds 6-coil polywell `magpylib.Collection`. |
-| `src/eext/eext.py` | Overwrites zeroed E-field datasets in existing HDF5 with analytically computed values. |
-| `src/eext/methods.py` | Contains `fw_e`, `bob_e` analytic integrand functions and the `EMethods` enum. |
-| `src/utils/paths.py` | `ROOT_DIR` and `BEXT_DIR` path constants, resolved relative to `__file__`. |
-| `src/utils/cyl.py` | `toCyl()` and `toCart()` coordinate helpers. |
+| `src/warpx_polywell/bext/bext.py` | Computes 3D B-field grid from polywell coils via magpylib; writes openPMD HDF5. |
+| `src/warpx_polywell/bext/make_collection.py` | Builds 6-coil polywell `magpylib.Collection`. |
+| `src/warpx_polywell/eext/eext.py` | Overwrites zeroed E-field datasets in existing HDF5 with analytically computed values. |
+| `src/warpx_polywell/eext/methods.py` | Contains `fw_e`, `bob_e` analytic integrand functions and the `EMethods` enum. |
+| `src/warpx_polywell/utils/paths.py` | `ROOT_DIR` and `BEXT_DIR` path constants, resolved relative to `__file__`. |
+| `src/warpx_polywell/utils/cyl.py` | `toCyl()` and `toCart()` coordinate helpers. |
 | `output/bext/` | Cached HDF5 field files. Filename encodes all parameters as cache key. |
 
 ---
@@ -395,7 +396,7 @@ Both use `warpx_format='openpmd'`, `warpx_openpmd_backend='h5'` and are compatib
 
 ---
 
-## 7. Module: `src/bext`
+## 7. Module: `src/warpx_polywell/bext`
 
 Generates the 3D B-field grid from polywell coil geometry and writes it as an openPMD HDF5 file.
 
@@ -472,7 +473,7 @@ make_bext_file(I, dia, offset, L, N)
 
 ---
 
-## 8. Module: `src/eext`
+## 8. Module: `src/warpx_polywell/eext`
 
 Computes the E-field from charged rings and overwrites the zeroed E-field placeholder
 left by `bext.py`.
@@ -562,7 +563,7 @@ World Cartesian
 
 ---
 
-## 9. Module: `src/utils`
+## 9. Module: `src/warpx_polywell/utils`
 
 ### `cyl.py`
 
@@ -587,7 +588,7 @@ z = z
 ### `paths.py`
 
 ```python
-_script_dir = Path(__file__).resolve().parent   # src/utils/
+_script_dir = Path(__file__).resolve().parent   # src/warpx_polywell/utils/
 ROOT_DIR    = _script_dir.parent.parent          # WarpX/
 BEXT_DIR    = ROOT_DIR / "output" / "bext"      # WarpX/output/bext/
 ```
@@ -595,7 +596,7 @@ BEXT_DIR    = ROOT_DIR / "output" / "bext"      # WarpX/output/bext/
 | Constant | Resolves to | Used by |
 |---|---|---|
 | `ROOT_DIR` | Project root | Internal derivation |
-| `BEXT_DIR` | `output/bext/` | `src/bext/bext.py` |
+| `BEXT_DIR` | `output/bext/` | `src/warpx_polywell/bext/bext.py` |
 
 **Adding a new path:**
 
@@ -604,7 +605,7 @@ BEXT_DIR    = ROOT_DIR / "output" / "bext"      # WarpX/output/bext/
 NEW_DIR = ROOT_DIR / "output" / "new_dir"
 
 # Elsewhere
-from src.utils.paths import NEW_DIR
+from warpx_polywell.utils.paths import NEW_DIR
 ```
 
 ---

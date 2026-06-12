@@ -1,4 +1,4 @@
-# `src/eext` — External E-field Module
+# `src/warpx_polywell/eext` — External E-field Module
 
 Computes the electric field from a set of charged rings (same geometry as the magnetic coils)
 and writes the result into an existing B-field HDF5 file, overwriting the zeroed E-field
@@ -10,9 +10,9 @@ placeholder that `bext.py` left behind.
 
 | File | Purpose |
 |---|---|
-| `src/eext/eext.py` | Grid computation and HDF5 population |
-| `src/eext/methods.py` | Analytic E-field integrands + `EMethods` enum |
-| `src/eext/potential.py` | Closed-form ring scalar potential φ (elliptic integrals); fully vectorised — typically ~100× faster than the per-point `methods.py` loop for the same physics |
+| `src/warpx_polywell/eext/eext.py` | Grid computation and HDF5 population |
+| `src/warpx_polywell/eext/methods.py` | Analytic E-field integrands + `EMethods` enum |
+| `src/warpx_polywell/eext/potential.py` | Closed-form ring scalar potential φ (elliptic integrals); fully vectorised — typically ~100× faster than the per-point `methods.py` loop for the same physics |
 
 ---
 
@@ -103,10 +103,10 @@ Parameters:
     dia            : float             — ring diameter (m)
     offset         : float             — ring center offset from origin (m)
     Q              : float             — total charge per ring (C)
-    domain         : src.domain.Domain — simulated-domain spec
+    domain         : warpx_polywell.domain.Domain — simulated-domain spec
     use_potentials : bool              — if True, build E by summing the
                                           closed-form ring potential φ from
-                                          src.eext.potential.compute_phi_grid
+                                          warpx_polywell.eext.potential.compute_phi_grid
                                           over 6 polywell rings and taking
                                           E = -∇φ. The appended filename
                                           segment carries a `_potentials` tag.
@@ -152,7 +152,7 @@ Parameters:
     dia    : float             — ring diameter (m)
     offset : float             — ring center distance from origin (m)
     Q      : float             — total charge per ring (C)
-    domain : src.domain.Domain — simulated-domain spec
+    domain : warpx_polywell.domain.Domain — simulated-domain spec
 
 Returns:
     Ex, Ey, Ez   : ndarray of shape domain.n_cells — E-field components (V/m)

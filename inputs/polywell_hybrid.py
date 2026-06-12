@@ -35,11 +35,11 @@ import shutil
 # Pywarpx utils, plus callbacks which can be useful for diagnostic (live saving of fields for example)
 from pywarpx import picmi, callbacks, warpx
 
-from src.db.runs import RunsDB, new_run_dir
+from warpx_polywell.db.runs import RunsDB, new_run_dir
 
 from configs.polywell_hybrid_config import PolywellHybridConfig, HYBRID_CONFIG
-from src.domain import plasma_bounds
-from src.spawn import make_layout
+from warpx_polywell.domain import plasma_bounds
+from warpx_polywell.spawn import make_layout
 
 import numpy as np
 import scipy.constants as sc
@@ -47,7 +47,7 @@ import scipy.constants as sc
 import argparse
 from pathlib import Path
 
-from src.bext.analytic import build_aext_expressions, build_n_turn_aext_expression
+from warpx_polywell.bext.analytic import build_aext_expressions, build_n_turn_aext_expression
 
 from dataclasses import asdict
 import json

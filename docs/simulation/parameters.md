@@ -68,7 +68,7 @@ For a detailed comparison of the two modes, see
 
 ## Symmetry
 
-The polywell has cubic symmetry. Setting `symmetry = "octant"` reduces the simulated region to one octant (`[0, +L]³`), using PMC (Perfect Magnetic Conductor) on the three inner faces and `reflecting` for particles. Field/particle BCs are derived automatically by `derive_domain(symmetry, L, N)` (`src/domain.py`).
+The polywell has cubic symmetry. Setting `symmetry = "octant"` reduces the simulated region to one octant (`[0, +L]³`), using PMC (Perfect Magnetic Conductor) on the three inner faces and `reflecting` for particles. Field/particle BCs are derived automatically by `derive_domain(symmetry, L, N)` (`src/warpx_polywell/domain.py`).
 
 | Parameter | Default | Type | Description |
 |---|---|---|---|
@@ -112,7 +112,7 @@ A (rather than B directly), so the two settings have to move together.
 
 | Parameter | Default | Type | Description |
 |---|---|---|---|
-| `use_hybrid` | `False` | `bool` | When True: solver is `HybridPICSolver`, the B file is built via Coulomb-gauge FFT curl-inverse for A (`src.bext.vector_potential`) and the openPMD `A` mesh is wired into `external_vector_potential.polywell.{read_from_file, path}`. When False: solver is `ElectromagneticSolver(Yee)`, B comes straight from magpylib, E comes from the analytic ring integrand. |
+| `use_hybrid` | `False` | `bool` | When True: solver is `HybridPICSolver`, the B file is built via Coulomb-gauge FFT curl-inverse for A (`warpx_polywell.bext.vector_potential`) and the openPMD `A` mesh is wired into `external_vector_potential.polywell.{read_from_file, path}`. When False: solver is `ElectromagneticSolver(Yee)`, B comes straight from magpylib, E comes from the analytic ring integrand. |
 | `use_potentials` | derived from `use_hybrid` | `bool` | Don't set this by hand. It exists so `setup_bext` / `fill_eext_file` can be driven without solver coupling, but in `polywell_input.py` it's just `use_potentials = use_hybrid`. |
 
 > **Cache safety.** With `use_hybrid=True` the generated `.h5` filenames
@@ -122,7 +122,7 @@ A (rather than B directly), so the two settings have to move together.
 
 > **DB column.** `use_hybrid` is a filterable column in `runs.db`. List
 > hybrid-mode runs with
-> `python -m src.db.runs list use_hybrid=true`.
+> `python -m warpx_polywell.db.runs list use_hybrid=true`.
 
 ---
 

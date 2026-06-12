@@ -9,7 +9,7 @@ Usage:
 """
 import shutil
 from pathlib import Path
-from src.utils.config import get_config
+from warpx_polywell.utils.config import get_config
 import os, pickle
 
 # Google Drive API imports are intentionally deferred into DriveBackend

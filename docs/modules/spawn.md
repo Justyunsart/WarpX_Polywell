@@ -1,4 +1,4 @@
-# `src/spawn.py` — Particle Spawning Layouts
+# `src/warpx_polywell/spawn.py` — Particle Spawning Layouts
 
 Single helper that selects between density-based and count-based particle loading. The distribution object (`picmi.UniformDistribution(density=p_density, …)`) is unchanged in either mode — only the *layout* differs, so the represented physical density is identical across modes.
 

@@ -1,7 +1,7 @@
 import trimesh
 import numpy as np
 from pathlib import Path
-from src.utils.paths import ROOT_DIR
+from warpx_polywell.utils.paths import ROOT_DIR
 
 
 def make_coil_stl(coil_structure, b_offset, L, N, r1 = None, r2 = None, n_turns = None, full=True):

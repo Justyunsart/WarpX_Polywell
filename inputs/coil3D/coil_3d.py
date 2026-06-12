@@ -120,7 +120,7 @@ grid = picmi.Cartesian3DGrid(
     warpx_max_grid_size=32,
 )
 
-import src.bext.analytic as analytic
+import warpx_polywell.bext.analytic as analytic
 
 analytic.POLYWELL_COILS = [('x', 1, 1)]
 A_external = analytic.build_aext_expressions(I=cfg.I, dia=cfg.dia, offset=0.0, eps=cfg.eps)

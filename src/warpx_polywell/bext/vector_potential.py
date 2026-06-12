@@ -17,9 +17,9 @@ space, then crop back to the physics region.
 `converge_A_grid` doubles pad_factor until A in the physics region stops moving.
 
 Usage:
-    from src.bext.make_collection import make_polywell_collection
-    from src.bext.vector_potential import converge_A_grid
-    from src.domain import derive_domain
+    from warpx_polywell.bext.make_collection import make_polywell_collection
+    from warpx_polywell.bext.vector_potential import converge_A_grid
+    from warpx_polywell.domain import derive_domain
 
     domain = derive_domain("full", L=2.0, N=64)
     coll   = make_polywell_collection(I=1e6, dia=1.0, d=0.435)
@@ -238,8 +238,8 @@ if __name__ == "__main__":
     verify ∇×A ≈ B, and plot |A| on the z = 0 mid-plane.
     """
     import matplotlib.pyplot as plt
-    from src.bext.make_collection import make_polywell_collection
-    from src.domain import derive_domain
+    from warpx_polywell.bext.make_collection import make_polywell_collection
+    from warpx_polywell.domain import derive_domain
 
     domain = derive_domain("full", L=2.0, N=48)
     coll = make_polywell_collection(1e6, dia=1.0, d=0.435)

@@ -1,7 +1,7 @@
 ---
 paths:
   - inputs/polywell_input.py
-  - src/db/runs.py
+  - src/warpx_polywell/db/runs.py
   - tests/coil_field_analysis/_build_efield_notebook.py
   - tests/coil_field_analysis/_build_polywell_opt_notebook.py
 ---
@@ -19,14 +19,14 @@ The single simulation driver. Reads user parameters at the top of the file (B/E 
 - **Outputs:** `output/runs/run_YYYYMMDD_HHMMSS/diags/diag/openpmd_%T.h5` (combined field + particle diagnostic), plus a `run_metadata.json` sidecar and a snapshot copy of the deck itself. One row inserted into `output/runs.db`.
 - **Gotcha:** must run from the project root. First run at a new parameter set is slow (field grid generation); subsequent runs hit `output/bext/` cache.
 
-## `src/db/runs.py`
+## `src/warpx_polywell/db/runs.py`
 
 SQLite registry for simulation runs. Doubles as a library (`RunsDB`, `new_run_dir`) and a `__main__` CLI.
 
 - **CLI:**
-  - `python -m src.db.runs list [k=v …]` — list rows; filters include `status=`, `b_method=`, `e_method=`, `symmetry=`, `particle_mode=`, etc.
-  - `python -m src.db.runs get <id>` — fetch one row as JSON
-  - `python -m src.db.runs scan [<runs_root>]` — backfill rows for `output/runs/run_*/` that pre-date the DB (or any external root)
+  - `python -m warpx_polywell.db.runs list [k=v …]` — list rows; filters include `status=`, `b_method=`, `e_method=`, `symmetry=`, `particle_mode=`, etc.
+  - `python -m warpx_polywell.db.runs get <id>` — fetch one row as JSON
+  - `python -m warpx_polywell.db.runs scan [<runs_root>]` — backfill rows for `output/runs/run_*/` that pre-date the DB (or any external root)
 - **Library use:** `with RunsDB().run_context(run_dir, params) as run_id: …` — context manager handles `completed` / `failed` status on exit.
 - **Schema additions:** when adding a new user-input parameter, append to `_SCHEMA`, `_MIGRATIONS`, `_BACKFILL_COLUMNS`, **and** `SCALAR_MAP` together. Migrations apply via `ALTER TABLE` on existing DBs.
 - **Gotcha:** `scan_existing()` is best-effort — its AST-parse recognises literal assignments and the `<num> * sc.eV` pattern for Te/Ti only. Non-literal expressions are silently dropped.
@@ -38,7 +38,7 @@ One-shot generator for `E_Field_Analysis.ipynb`. Runs at module scope (no `if __
 - **Run:** `python tests/coil_field_analysis/_build_efield_notebook.py` from project root.
 - **Inputs:** none — geometry parameters (`DIA`, `OFFSET`, `Q`, `L`, `N`) are baked into the embedded cell strings.
 - **Outputs:** `tests/coil_field_analysis/E_Field_Analysis.ipynb` (overwrites in place). The notebook itself, when later executed in Jupyter, writes PNGs to `tests/coil_field_analysis/plots/`.
-- **Gotcha:** imports `src.eext`, `src.bext`, `src.domain` — must run from project root. The embedded notebook code calls `get_e_field_data(..., domain=domain)` after the recent Domain refactor, so old generated notebooks need regeneration.
+- **Gotcha:** imports `warpx_polywell.eext`, `warpx_polywell.bext`, `warpx_polywell.domain` — must run from project root. The embedded notebook code calls `get_e_field_data(..., domain=domain)` after the recent Domain refactor, so old generated notebooks need regeneration.
 
 ## `tests/coil_field_analysis/_build_polywell_opt_notebook.py`
 

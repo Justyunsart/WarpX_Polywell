@@ -98,10 +98,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers projection)
 
-from src.eext.eext import get_e_field_data
-from src.eext.methods import fw_e, bob_e
-from src.bext.make_collection import make_polywell_collection
-from src.domain import derive_domain
+from warpx_polywell.eext.eext import get_e_field_data
+from warpx_polywell.eext.methods import fw_e, bob_e
+from warpx_polywell.bext.make_collection import make_polywell_collection
+from warpx_polywell.domain import derive_domain
 
 PLOTS_DIR = NB_DIR / "plots"
 PLOTS_DIR.mkdir(exist_ok=True)

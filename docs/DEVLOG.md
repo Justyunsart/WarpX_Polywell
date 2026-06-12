@@ -104,7 +104,7 @@ updated. The 2D `coil_2d.py` example is still written with
 
 ### What changed
 
-- **New module [`src/bext/vector_potential.py`](../src/bext/vector_potential.py).**
+- **New module [`src/warpx_polywell/bext/vector_potential.py`](../src/warpx_polywell/bext/vector_potential.py).**
   Computes the vector potential A on the WarpX grid from any
   magpylib-evaluable B. Coulomb-gauge FFT curl-inverse on a zero-padded
   box: `Ã(k) = i (k × B̃) / |k|²` with the DC mode zeroed.
@@ -112,7 +112,7 @@ updated. The 2D `coil_2d.py` example is still written with
   pass; `converge_A_grid(...)` doubles `pad_factor` (2 → 4 → 8) until A in
   the physics region stops moving by more than `rtol`. `curl_A` and
   `check_curl` are reusable helpers for `B = ∇×A` and verification.
-- **New module [`src/eext/potential.py`](../src/eext/potential.py).**
+- **New module [`src/warpx_polywell/eext/potential.py`](../src/warpx_polywell/eext/potential.py).**
   Closed-form scalar potential φ for a charged ring (elliptic integrals;
   `φ = Q·K(k) / (2π²ε₀√((a+ρ)² + z²))`). Reuses
   `make_polywell_collection` for the 6 ring placements/orientations and is
@@ -294,13 +294,13 @@ Commit: [`4951a89`](../) — *unblock octant polywell run + drop failed-run rows
   symmetry planes need it (tangential B = 0, normal E = 0). Same pattern
   pywarpx uses for `"open"` at runtime.
 - **"count" particle mode is now per-cell.** Renamed `n_test_particles` →
-  `n_test_particles_per_cell` in [`src/spawn.py`](../src/spawn.py) and the
+  `n_test_particles_per_cell` in [`src/warpx_polywell/spawn.py`](../src/warpx_polywell/spawn.py) and the
   input deck. WarpX's `AnalyticDistribution` paired with `PseudoRandomLayout`
   only accepts `n_macroparticles_per_cell`, not a global total — see
   `pywarpx/picmi.py:591`.
 - **Runs DB schema cleanup.** Dropped the old `n_test_particles` column,
   added `n_test_particles_per_cell`. Introduced a `_DELETIONS` list in
-  [`src/db/runs.py`](../src/db/runs.py) parallel to `_MIGRATIONS` for
+  [`src/warpx_polywell/db/runs.py`](../src/warpx_polywell/db/runs.py) parallel to `_MIGRATIONS` for
   retiring columns via `ALTER TABLE … DROP COLUMN` (no-op via try/except
   on DBs that never had the column).
 - **Strict failure policy in `run_context`.** Failed runs are now *deleted*

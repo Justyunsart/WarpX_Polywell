@@ -7,7 +7,7 @@ a schema tailored to the polywell PIC setup in inputs/polywell_input.py.
 
 Usage
 -----
-    from src.db.runs import RunsDB, new_run_dir
+    from warpx_polywell.db.runs import RunsDB, new_run_dir
 
     # One-shot:
     db = RunsDB()
@@ -44,7 +44,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from src.utils.paths import ROOT_DIR
+from warpx_polywell.utils.paths import ROOT_DIR
 
 # ---------------------------------------------------------------------------
 # Paths

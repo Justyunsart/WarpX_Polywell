@@ -33,7 +33,7 @@ produce the B used by Ohm's law.
 | **Analytic** | `particles.B_ext_particle_init_style = "parse_B_ext_particle_function"` | Provide a math expression string for each of Bx, By, Bz as a function of `(x, y, z)`. WarpX evaluates the expression exactly at each particle position every step. No file, no interpolation. |
 | **Potentials** (Hybrid-PIC only) | `external_vector_potential.<name>.read_from_file = 1` + `…path = <openPMD .h5>` | Pre-compute A on a 3D grid via Coulomb-gauge FFT curl-inverse of the magpylib B, store as a Wb/m `A` mesh in an openPMD file. WarpX's hybrid solver reads A and computes `B = ∇×A` internally each step. |
 
-The `setup_bext()` dispatcher in `src/bext/bext.py` handles all wiring
+The `setup_bext()` dispatcher in `src/warpx_polywell/bext/bext.py` handles all wiring
 automatically. For the potentials path it forces `use_potentials=True`
 whenever `solver="hybrid"` is passed (so the cache filename and the
 ParmParse keys stay consistent) and calls `_wire_hybrid_external_A` to
@@ -318,7 +318,7 @@ larger than the physics region (with `B = 0` in the pad region), invert in
 Fourier space, then crop back. Doubling `pad_factor` until A in the
 physics region stops moving gives a clean convergence test.
 
-`src/bext/vector_potential.py` implements all of this:
+`src/warpx_polywell/bext/vector_potential.py` implements all of this:
 
 | Function | Purpose |
 |---|---|
@@ -362,7 +362,7 @@ external_vector_potential.polywell.A_time_external_grid_function(t) = 1
 ### E-field counterpart
 
 When `use_potentials` is True, `fill_eext_file` similarly switches to a
-**closed-form scalar potential φ** pipeline (`src/eext/potential.py`):
+**closed-form scalar potential φ** pipeline (`src/warpx_polywell/eext/potential.py`):
 `compute_phi_grid(Q, dia, offset, domain)` superposes
 `φ = Q·K(k) / (2π²ε₀√((a+ρ)² + z²))` from 6 polywell-arranged rings,
 vectorised over the whole grid, then `compute_E_from_phi(phi, dx)`
@@ -415,7 +415,7 @@ WarpX hybrid solver reads A from ext_path, curls it internally each step
 ### `setup_bext(method, particles, warpx_module, *, I, dia, offset, domain)`
 
 The single entry point for configuring external B-fields. Located in
-`src/bext/bext.py`.
+`src/warpx_polywell/bext/bext.py`.
 
 ```
 Parameters:
@@ -425,7 +425,7 @@ Parameters:
     I            : float          — coil current (A)
     dia          : float          — coil diameter (m)
     offset       : float          — coil center distance from origin (m)
-    domain       : src.domain.Domain — simulated-domain spec; required for
+    domain       : warpx_polywell.domain.Domain — simulated-domain spec; required for
                    "file" mode (carries bounds/n_cells/symmetry), ignored by
                    "analytic" mode (closed-form expressions are coordinate-agnostic).
 
@@ -444,7 +444,7 @@ The `domain` argument lets file mode automatically sample on `(N, N, N)` (full) 
 
 ### `build_bext_expressions(I, dia, offset)` → `dict`
 
-Located in `src/bext/analytic.py`. Builds the three AMReX parser expression
+Located in `src/warpx_polywell/bext/analytic.py`. Builds the three AMReX parser expression
 strings for a 6-coil polywell.
 
 ```
@@ -460,7 +460,7 @@ Returns:
 
 ### `B_polywell(X, Y, Z, I, dia, offset)` → `(Bx, By, Bz)`
 
-Located in `src/bext/analytic.py`. NumPy evaluation of the same field (for
+Located in `src/warpx_polywell/bext/analytic.py`. NumPy evaluation of the same field (for
 testing, plotting, and validation — not used by WarpX at runtime).
 
 ```
@@ -476,7 +476,7 @@ Returns:
 
 ### `B_single_loop(rho, zeta, a, I)` → `(B_rho, B_zeta)`
 
-Located in `src/bext/analytic.py`. Core kernel — computes the cylindrical field
+Located in `src/warpx_polywell/bext/analytic.py`. Core kernel — computes the cylindrical field
 components from a single current loop using scipy's `ellipk(m)` and `ellipe(m)`.
 
 ```

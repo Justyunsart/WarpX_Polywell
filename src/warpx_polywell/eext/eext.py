@@ -1,11 +1,11 @@
 """
 Functions to fill the external fields file with the E-field computed with parameters from the polywell input.
 """
-from src.bext.make_collection import make_polywell_collection # This is a convenient container for getting rotations
-from src.domain import Domain
+from warpx_polywell.bext.make_collection import make_polywell_collection # This is a convenient container for getting rotations
+from warpx_polywell.domain import Domain
 from magpylib.current import Circle
-from src.utils.cyl import toCyl, toCart
-from src.utils.storage import get_backend
+from warpx_polywell.utils.cyl import toCyl, toCart
+from warpx_polywell.utils.storage import get_backend
 import numpy as np
 import pathlib
 from typing import Callable
@@ -161,7 +161,7 @@ def _get_e_field_data_via_potentials(dia, offset, Q, domain: Domain):
     Ex, Ey, Ez : (nx, ny, nz) arrays in V/m
     grid_spacing : list [dx, dy, dz] in meters
     """
-    from src.eext.potential import compute_phi_grid, compute_E_from_phi
+    from warpx_polywell.eext.potential import compute_phi_grid, compute_E_from_phi
 
     print(
         f"[_get_e_field_data_via_potentials] Computing φ on grid: dia={dia}m, "

@@ -1,7 +1,7 @@
 [project]
-name = "warpx"
+name = "warpx-polywell"
 version = "0.1.0"
-description = ""
+description = "WarpX particle-in-cell simulation harness for a polywell fusion configuration."
 authors = [
     {name = "Justyunsart",email = "yunroh02@gmail.com"}
 ]
@@ -13,6 +13,10 @@ dependencies = [
     "scipy (>=1.17.1,<2.0.0)",
     "wurlitzer (>=3.1.1,<4.0.0)"
 ]
+
+
+[tool.poetry]
+packages = [{ include = "warpx_polywell", from = "src" }]
 
 
 [build-system]

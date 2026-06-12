@@ -32,13 +32,13 @@ import numpy as np
 import scipy.constants as sc
 from scipy.special import ellipe, ellipk
 
-from src.bext.make_collection import make_polywell_collection
-from src.bext.vector_potential import (
+from warpx_polywell.bext.make_collection import make_polywell_collection
+from warpx_polywell.bext.vector_potential import (
     compute_A_grid,
     converge_A_grid,
     curl_A,
 )
-from src.domain import derive_domain
+from warpx_polywell.domain import derive_domain
 
 
 # ----------------------------- formatting -----------------------------
