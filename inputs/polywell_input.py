@@ -1,6 +1,18 @@
 import os
 import shutil
+import importlib.util
 from pywarpx import picmi, warpx, particles
+
+# Fail fast with an actionable message if the package was never installed, rather
+# than a raw ModuleNotFoundError. (A missing *submodule* of an installed package
+# still raises normally below, so this only catches the "not installed" case.)
+if importlib.util.find_spec("warpx_polywell") is None:
+    raise SystemExit(
+        "\n[polywell] The 'warpx_polywell' package is not installed in this "
+        "environment.\n"
+        "           Install it (editable) from the project root, then re-run:\n"
+        "               poetry install        # or:  pip install -e . --no-deps\n"
+    )
 
 # PICMI's BC_map has no entry for WarpX's native "pmc" boundary; register a
 # passthrough so octant-symmetry planes (tangential B = 0, normal E = 0) work.

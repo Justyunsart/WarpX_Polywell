@@ -120,6 +120,14 @@ fi
 log "Installing conda-forge packages into '$ENV_NAME'"
 run "$MGR" install -n "$ENV_NAME" -c conda-forge -y "${CONDA_FORGE_PKGS[@]}"
 
+# ------------------------------ install local package ------------------------
+# Editable-install the warpx_polywell package so `import warpx_polywell` resolves
+# from any working directory. `--no-deps` because every runtime dependency is
+# already provided by conda-forge above — we only want pip to wire up the
+# editable link, not layer PyPI builds over the conda scientific stack.
+log "Installing the warpx_polywell package (editable) into '$ENV_NAME'"
+run conda run -n "$ENV_NAME" python -m pip install -e . --no-deps
+
 # ------------------------------ verify ---------------------------------------
 if [[ "$DRY_RUN" -eq 0 ]]; then
     log "Verifying imports"
@@ -136,6 +144,7 @@ needed = [
     ("scipy.constants", "Physical constants"),
     ("scipy.special", "Elliptic integrals"),
     ("matplotlib", "Plotting"),
+    ("warpx_polywell", "Polywell simulation package (editable install)"),
 ]
 bad = []
 for mod, why in needed:
@@ -164,5 +173,6 @@ Next steps:
   cd "$(pwd)"
   python inputs/polywell_input.py
 
-Tip: run from the project root so 'from src.*' imports resolve.
+Tip: 'warpx_polywell' is installed editable, so imports resolve from anywhere.
+     Still launch from the project root so generated output/ lands beside the repo.
 EOF
