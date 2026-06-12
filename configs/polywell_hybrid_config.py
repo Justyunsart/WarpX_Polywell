@@ -36,6 +36,7 @@ class PolywellHybridConfig:
     # Grid  
     L:                              float           = 2.0
     N:                              int             = 24
+    # NOTE: This is used to determine particle weight
     n_per_cell_each_dim:            list            = field(default_factory=lambda: [10, 10, 10])
 
     # B-field           
@@ -111,6 +112,7 @@ HYBRID_CONFIG = PolywellHybridConfig(
     plasma_bounding         = 1, # this needs to actually be within the null zone, L * bounding <= offset
     L                       = 0.2,
     N                       = 128,
+    # NOTE: Used to determine particle weight
     n_per_cell_each_dim     = [5, 5, 5],
     b_dia                   = 0.1,
     b_offset                = 0.1,

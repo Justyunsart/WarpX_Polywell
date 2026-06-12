@@ -285,7 +285,7 @@ def build_bext_expressions(I, dia, offset):
         'Bz': preamble + "; " + "+".join(Bz_terms),
     }
 
-def _coil_aext_term(tag, axis, component):
+def _coil_aext_term(tag, axis, component, eps=1e-30):
     """
     Return the expression fragment for one coil's contribution to a
     Cartesian component (Ax, Ay, or Az) using phi_hat projection.
@@ -296,13 +296,13 @@ def _coil_aext_term(tag, axis, component):
     # axis='x': Ax=0,          Ay=-Aphi*z/r,  Az=+Aphi*y/r
     # axis='y': Ax=+Aphi*z/r,  Ay=0,          Az=-Aphi*x/r
     mapping = {
-        'z': {'Ax': f"-Aphi_{tag}*y/(r_{tag}+1e-30)",  'Ay': f"Aphi_{tag}*x/(r_{tag}+1e-30)",   'Az': "0.0"},
-        'x': {'Ax': "0.0",                              'Ay': f"-Aphi_{tag}*z/(r_{tag}+1e-30)",  'Az': f"Aphi_{tag}*y/(r_{tag}+1e-30)"},
-        'y': {'Ax': f"Aphi_{tag}*z/(r_{tag}+1e-30)",   'Ay': "0.0",                              'Az': f"-Aphi_{tag}*x/(r_{tag}+1e-30)"},
+        'z': {'Ax': f"-Aphi_{tag}*y/(r_{tag}+{eps})",  'Ay': f"Aphi_{tag}*x/(r_{tag}+{eps})",   'Az': "0.0"},
+        'x': {'Ax': "0.0",                              'Ay': f"-Aphi_{tag}*z/(r_{tag}+{eps})",  'Az': f"Aphi_{tag}*y/(r_{tag}+{eps})"},
+        'y': {'Ax': f"Aphi_{tag}*z/(r_{tag}+{eps})",   'Ay': "0.0",                              'Az': f"-Aphi_{tag}*x/(r_{tag}+{eps})"},
     }
     return mapping[axis][component]
 
-def build_aext_expressions(I, dia, offset):
+def build_aext_expressions(I, dia, offset, eps=1e-30):
     """
     Returns a dict of 6 coil entries for WarpX's A_external nested dict.
     Each coil has its own self-contained Ax, Ay, Az parser expressions
@@ -328,9 +328,9 @@ def build_aext_expressions(I, dia, offset):
         )
         preamble = "; ".join(var_defs)
 
-        ax_term = _coil_aext_term(tag, axis, 'Ax')
-        ay_term = _coil_aext_term(tag, axis, 'Ay')
-        az_term = _coil_aext_term(tag, axis, 'Az')
+        ax_term = _coil_aext_term(tag, axis, 'Ax', eps)
+        ay_term = _coil_aext_term(tag, axis, 'Ay', eps)
+        az_term = _coil_aext_term(tag, axis, 'Az', eps)
 
         coils[f'coil_{tag}'] = {
             'Ax_external_function': preamble + "; " + (f"{coil_I:.15e}*({ax_term})" if ax_term != "0.0" else "0.0"),

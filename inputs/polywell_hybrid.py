@@ -124,6 +124,7 @@ class PollywellSixCoilHybrid:
         warpx.filter_npass_each_dir = [2, 2, 2]
         self.get_plasma_quantities()
         self.get_sim_length()
+        exit()
         self.set_grid()
         self.set_b_field()
         self.set_solver() 
@@ -709,6 +710,23 @@ class PollywellSixCoilHybrid:
         self.sim.add_diagnostic(particle_energy_reduced_diag)
 
     def cusp_loss_count(self, pc):
+
+        injection_sphere_count = 0.0
+        injection_radius = self.plasma_bounding * self.L
+
+        for pti in pc.iterator(level=0):
+            x  = np.array(pti['x'], copy=False)
+            y  = np.array(pti['y'], copy=False)
+            z  = np.array(pti['z'], copy=False)
+
+            # Tried doing this as a loop outside but doesn't work, for some reason works here
+            # if we want that blast to endure, we can resort to keeping the initial density at every timestep
+            in_sphere = (x**2 + y**2 + z**2 < injection_radius**2)
+            cur_injection_sphere_count = np.sum(in_sphere)
+            injection_sphere_count += cur_injection_sphere_count
+
+        print("MADE IT TO INJECTION SPHERE COUNT: ", injection_sphere_count)
+
         total = 0.0
         per_face = []
         
@@ -757,8 +775,10 @@ class PollywellSixCoilHybrid:
             
             per_face.append(loss)
             total += loss
+
+        print("MADE IT TO CUSP LOSS: ", total)
         
-        return int(round(total)), per_face
+        return int(round(total)), per_face, injection_sphere_count
 
     def add_injection_callback(self):
         # TODO: Make injection outweigh loss, that initial burst effect should remain as a continuous effect, have N_inject increase up to max loss and remain as such. 
@@ -769,25 +789,37 @@ class PollywellSixCoilHybrid:
         _loss_log = {
             "times": [], 
             "per_face": [], 
-            "peak_loss": 0
+            "from_injection_volume": [],
+            "peak_cusp_loss": 0
             }  # closure state
         df = particle_container.to_df(local=True)
         weight = df['w'].iloc[0]
+        N_t0 = len(df['w'])
+        print(f"INITIAL PARTICLE COUNT: {N_t0:3e}")
         def inject_particles():
-            total_loss, per_face = self.cusp_loss_count(particle_container)
-
+            total_loss, per_face, injection_sphere_count = self.cusp_loss_count(particle_container)
+            # Have to divide by 6 since we count these six times, it's a waste but random bug occurred when doing it "properly"
+            injection_sphere_count = injection_sphere_count // 6
+            print("INJECTION SPHERE COUNT: ", injection_sphere_count)
+            injection_sphere_loss = max(N_t0 - injection_sphere_count, 0)
+            _loss_log['from_injection_volume'].append(injection_sphere_loss)
             # Retain that density lost to the burst, 
-            N_inject = max(_loss_log['peak_loss'], total_loss)
-            _loss_log['peak_loss'] = N_inject
+            N_inject = int(max(_loss_log['peak_cusp_loss'], total_loss, injection_sphere_loss))
+            # Keep track of losses through cusps
+            _loss_log['peak_cusp_loss'] = max(_loss_log['peak_cusp_loss'], total_loss)
 
-            print("[injection callback] Total face-cusp loss: ", total_loss, "\n[injection callback] Injection count: ", N_inject)
+            print(f"[injection callback] Total face-cusp loss: {total_loss}\n"
+                  f"[injection callback] Loss from initial spawn sphere: {injection_sphere_loss}\n"
+                  f"[injection callback] Injection count: {N_inject}\n"
+                  )
 
             _loss_log['times'].append(self.sim.extension.warpx.gett_new(0))
             _loss_log['per_face'].append(per_face)
             # simply return if nothing to add back in
             if N_inject == 0:
                 return
-            w = np.array([weight]*N_inject)
+            w = np.ones(N_inject) * weight
+            print("CREATED WEIGHT ARRAY")
             # uniform sphere sampling
             r = inject_radius * np.cbrt(np.random.uniform(0, 1, N_inject))
             theta = np.arccos(np.random.uniform(-1, 1, N_inject))
@@ -813,7 +845,8 @@ class PollywellSixCoilHybrid:
             np.savez("diags/cusp_flux.npz",
                     times=np.array(_loss_log["times"]),
                     losses=np.array(_loss_log["per_face"]),
-                    injected=_loss_log['peak_loss'],
+                    injected=_loss_log['peak_cusp_loss'],
+                    from_injection_volume=_loss_log['from_injection_volume'],
                     face_labels=["x_hi","x_lo","y_hi","y_lo","z_hi","z_lo"])
 
         callbacks.installcallback('afterstep',inject_particles)
