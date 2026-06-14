@@ -63,26 +63,32 @@ so all scripts find the correct directories regardless of where they are invoked
 
 ```python
 from pathlib import Path
+from warpx_polywell.utils.config import get_config
 
-_script_dir = Path(__file__).resolve().parent   # → .../src/warpx_polywell/utils/
-ROOT_DIR    = _script_dir.parent.parent          # → .../WarpX/
+_script_dir = Path(__file__).resolve().parent          # .../src/warpx_polywell/utils/
+ROOT_DIR    = _script_dir.parent.parent.parent          # .../WarpX/ (repo checkout)
 
-BEXT_DIR    = ROOT_DIR / "output" / "bext"      # → .../WarpX/output/bext/
+# Configured output base — follows LOCAL_OUTPUT_DIR in .env, defaults to
+# <repo>/output. Single source of truth for runs, the bext cache, and runs.db.
+OUTPUT_DIR  = Path(get_config()["LOCAL_OUTPUT_DIR"])
+BEXT_DIR    = OUTPUT_DIR / "bext"                        # field-file cache
 ```
 
 ### Constants
 
-| Name | Value (relative to project root) | Used by |
+| Name | Value | Used by |
 |---|---|---|
-| `ROOT_DIR` | `.` (project root) | `BEXT_DIR` derivation |
-| `BEXT_DIR` | `output/bext/` | `src/warpx_polywell/bext/bext.py` — where `.h5` field files are stored |
+| `ROOT_DIR` | repo checkout | git metadata; default output base |
+| `OUTPUT_DIR` | `LOCAL_OUTPUT_DIR` (`.env`), else `<repo>/output` | runs, `runs.db`, `BEXT_DIR` |
+| `BEXT_DIR` | `OUTPUT_DIR/bext/` | `src/warpx_polywell/bext/bext.py` — where `.h5` field files are stored |
 
 ### Adding New Paths
 
-To add a new output directory, extend `paths.py`:
+To add a new output directory, extend `paths.py` (anchor it on `OUTPUT_DIR` so
+it follows `.env`):
 
 ```python
-NEW_OUTPUT_DIR = ROOT_DIR / "output" / "new_dir"
+NEW_OUTPUT_DIR = OUTPUT_DIR / "new_dir"
 NEW_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)  # optional auto-creation
 ```
 

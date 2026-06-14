@@ -1,5 +1,3 @@
-import os
-import shutil
 import importlib.util
 from pywarpx import picmi, warpx, particles
 
@@ -20,7 +18,7 @@ picmi.BC_map["pmc"] = "pmc"
 from warpx_polywell.bext.bext import setup_bext, make_bext_file
 from warpx_polywell.eext.eext import fill_eext_file # should run AFTER B-field init.
 from warpx_polywell.eext.methods import EMethods # enum registry for available methods
-from warpx_polywell.db.runs import RunsDB, new_run_dir
+from warpx_polywell.db.runs import run_session
 from warpx_polywell.domain import derive_domain, plasma_bounds, VALID_SYMMETRIES
 from warpx_polywell.spawn import make_layout, VALID_PARTICLE_MODES
 import numpy as np
@@ -281,15 +279,6 @@ sim.add_diagnostic(part_diag)
 #######################
 # === RUN + LOGGING ===
 #######################
-# Allocate a per-run directory, snapshot this input script for reproducibility,
-# and register the run in the SQLite runs database before stepping. Diagnostics
-# are redirected into the run directory by chdir'ing before sim.step().
-run_dir = new_run_dir()
-try:
-    shutil.copy2(__file__, run_dir / "polywell_input.py")
-except Exception:
-    pass
-
 run_params = {
     # simulation control
     "max_steps":         max_steps,
@@ -323,21 +312,13 @@ run_params = {
     "use_hybrid":        int(bool(use_hybrid)),
     # diagnostics
     "diag_period":       field_diag.period,
-    "diag_path":         str(run_dir),
+    # diag_path defaults to the run dir inside run_session/register_run
 }
 
-db = RunsDB()
-_prev_cwd = os.getcwd()
-try:
-    with db.run_context(run_dir, run_params) as run_id:
-        print(f"[runs.db] registered run id={run_id} at {run_dir}")
-        os.chdir(run_dir)
-        try:
-            # Populate PICMI inputs (idempotent — sim.step() will skip the
-            # re-init via its self.inputs_initialized guard), then extend the
-            # WarpX-side fields_to_plot with names PICMI's parser dropped.
-            sim.step()
-        finally:
-            os.chdir(_prev_cwd)
-finally:
-    db.close()
+# Allocate the per-run directory (grouped under OUTPUT_DIR/polywell_input/),
+# snapshot this deck, register the run, and chdir in so diagnostics land inside.
+# run_session marks the run completed on clean exit / removes it on failure.
+with run_session(__file__, run_params):
+    # Populate PICMI inputs (idempotent — sim.step() will skip the re-init via
+    # its self.inputs_initialized guard) and advance the simulation.
+    sim.step()

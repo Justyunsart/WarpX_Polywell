@@ -374,26 +374,32 @@ def count_segment_flux():
 
 installafterstep(count_segment_flux)
 
-sim.step()
+# Group output under OUTPUT_DIR/coil_2d/run_* and register the run. run_session
+# chdir's into the run dir (so WarpX diagnostics + the segment-flux dump land
+# inside), marks the run completed on clean exit, and removes it on failure.
+# Keep run-relative writes inside the `with` block.
+from warpx_polywell.db.runs import run_session
+with run_session(__file__, {"max_steps": MAX_STEPS}):
+    sim.step()
 
-# Reduce across ranks (slab particles may live on any rank) and write once on root.
-try:
-    from mpi4py import MPI
-    _comm = MPI.COMM_WORLD
-    _seg_minus = _comm.allreduce(np.asarray(_seg_minus), op=MPI.SUM)
-    _seg_plus = _comm.allreduce(np.asarray(_seg_plus), op=MPI.SUM)
-    _is_root = _comm.Get_rank() == 0
-except Exception:
-    _is_root = True
-if _is_root:
-    os.makedirs("diags", exist_ok=True)
-    np.savez(os.path.join("diags", "segment_flux.npz"),
-             t_s=np.asarray(_seg_t, dtype=float),
-             rate_minus=np.asarray(_seg_minus, dtype=float),
-             rate_plus=np.asarray(_seg_plus, dtype=float),
-             dh=dh, slab_L=_seg_L)
-    print(f"[segment_flux] wrote diags/segment_flux.npz "
-          f"({len(_seg_t)} steps, peak rate_minus={np.max(_seg_minus):.3e})")
+    # Reduce across ranks (slab particles may live on any rank), write once on root.
+    try:
+        from mpi4py import MPI
+        _comm = MPI.COMM_WORLD
+        _seg_minus = _comm.allreduce(np.asarray(_seg_minus), op=MPI.SUM)
+        _seg_plus = _comm.allreduce(np.asarray(_seg_plus), op=MPI.SUM)
+        _is_root = _comm.Get_rank() == 0
+    except Exception:
+        _is_root = True
+    if _is_root:
+        os.makedirs("diags", exist_ok=True)
+        np.savez(os.path.join("diags", "segment_flux.npz"),
+                 t_s=np.asarray(_seg_t, dtype=float),
+                 rate_minus=np.asarray(_seg_minus, dtype=float),
+                 rate_plus=np.asarray(_seg_plus, dtype=float),
+                 dh=dh, slab_L=_seg_L)
+        print(f"[segment_flux] wrote diags/segment_flux.npz "
+              f"({len(_seg_t)} steps, peak rate_minus={np.max(_seg_minus):.3e})")
 
 # %% [markdown]
 # ## Post-processing sketch — β_dyn = 1 vs. Chapman–Ferraro

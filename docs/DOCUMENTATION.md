@@ -588,21 +588,23 @@ z = z
 ### `paths.py`
 
 ```python
-_script_dir = Path(__file__).resolve().parent   # src/warpx_polywell/utils/
-ROOT_DIR    = _script_dir.parent.parent          # WarpX/
-BEXT_DIR    = ROOT_DIR / "output" / "bext"      # WarpX/output/bext/
+_script_dir = Path(__file__).resolve().parent          # src/warpx_polywell/utils/
+ROOT_DIR    = _script_dir.parent.parent.parent          # WarpX/ (repo checkout)
+OUTPUT_DIR  = Path(get_config()["LOCAL_OUTPUT_DIR"])    # .env base, else <repo>/output
+BEXT_DIR    = OUTPUT_DIR / "bext"                        # field-file cache
 ```
 
 | Constant | Resolves to | Used by |
 |---|---|---|
-| `ROOT_DIR` | Project root | Internal derivation |
-| `BEXT_DIR` | `output/bext/` | `src/warpx_polywell/bext/bext.py` |
+| `ROOT_DIR` | repo checkout | git metadata; default output base |
+| `OUTPUT_DIR` | `LOCAL_OUTPUT_DIR` (`.env`), else `<repo>/output` | runs, `runs.db`, `BEXT_DIR` |
+| `BEXT_DIR` | `OUTPUT_DIR/bext/` | `src/warpx_polywell/bext/bext.py` |
 
-**Adding a new path:**
+**Adding a new path** (anchor on `OUTPUT_DIR` so it follows `.env`):
 
 ```python
 # In paths.py
-NEW_DIR = ROOT_DIR / "output" / "new_dir"
+NEW_DIR = OUTPUT_DIR / "new_dir"
 
 # Elsewhere
 from warpx_polywell.utils.paths import NEW_DIR

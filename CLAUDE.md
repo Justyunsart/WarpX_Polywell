@@ -58,10 +58,11 @@ No test runner or linter is configured. Validation notebooks under `tests/` run 
 
 ## Project-wide conventions
 
-- **`warpx_polywell` is an installed package.** After `poetry install`, `from warpx_polywell.* import ...` resolves from any directory — the repo root no longer needs to be on `sys.path`. Output still lands under the repo because `ROOT_DIR` is derived from the package's `__file__`, not the cwd; re-run `poetry install` if you move the package.
-- **Don't commit secrets.** `.env` (storage backend config) is gitignored; check before staging.
+- **`warpx_polywell` is an installed package.** After `poetry install`, `from warpx_polywell.* import ...` resolves from any directory — the repo root no longer needs to be on `sys.path`. Re-run `poetry install` if you move the package.
+- **`.env` sets the output base.** `LOCAL_OUTPUT_DIR` (loaded by `utils/config.py`, exposed as `paths.OUTPUT_DIR`) is the single root for *all* generated output — per-deck run dirs (`OUTPUT_DIR/<deck>/run_<timestamp>/`), the `bext/` field cache, and `runs.db`. It defaults to `<repo>/output` when unset. Each driver wraps its run in the shared `run_session(__file__, params)` context manager (in `db/runs.py`) — it allocates the per-deck run dir (MPI-safe), `chdir`s in, snapshots the deck, registers the run, and sets `completed`/cleans up on exit — so a new deck needs almost no output boilerplate. Post-processing resolves runs through `post/reader.py` (`latest_run`, `run_dir`, `chdir_to_run`) rather than hardcoding paths.
+- **Don't commit secrets.** `.env` (storage + output config) is gitignored; check before staging.
 - **Heavy compute is rank-0 only.** Field-file generation (magpylib, E-field integration) runs serially before `sim.step()`; only the WarpX PIC advance is parallel.
-- **Cache filenames are the cache key.** `output/bext/*.h5` names encode every parameter — changing any parameter produces a new file. Don't rename or hand-edit.
+- **Cache filenames are the cache key.** `OUTPUT_DIR/bext/*.h5` names encode every parameter — changing any parameter produces a new file. Don't rename or hand-edit.
 - **For library docs, prefer Context7 over web search.**
 
 ## Context7 library IDs

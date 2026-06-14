@@ -32,13 +32,14 @@ In root directory `./WarpX_Polywell`
     Or if using `octant` mode, a thread count that divides `N/2`
 
 ### Outputs
-- directory: `output/runs/{most_recent runs_123456_123456}/diags` where both `123456` are dictated by the date and time ran, respectively
+- directory: `OUTPUT_DIR/polywell_input/run_YYYYMMDD_HHMMSS/diags`, where `OUTPUT_DIR` follows `LOCAL_OUTPUT_DIR` in `.env` (default `<repo>/output`) and the `run_*` name is the date/time ran. Runs are grouped per deck, so a `polywell_hybrid` run lands under `OUTPUT_DIR/polywell_hybrid/…` instead.
+    - Tip: `python -m warpx_polywell.db.runs list` prints recent runs and their `run_dir`; in Python, `from warpx_polywell.post.reader import latest_run; latest_run("polywell_input")` resolves the newest one.
     - Here you will find `part_diag` and a `field_diag` folders
 
 ### Paraview pipeline
 **Note**: It helps to rename the `paraview.pmd` files after importing for clarity, this can be done via a double-click
 #### Field Pipeline
-1) Import the `paraview.pmd` file from the `output/runs/{run_folder}/diags/field_diag/paraview.pmd`
+1) Import the `paraview.pmd` file from the `OUTPUT_DIR/<deck>/{run_folder}/diags/field_diag/paraview.pmd`
 2) Click `Apply`
 ##### Visualizing field lines
 3) Right-click the `paraview.pmd` file in the Pipeline Browser window
@@ -46,7 +47,7 @@ In root directory `./WarpX_Polywell`
 5) Before `Apply`, scroll down to find `Seed Type`, and choose `Point Cloud`, adjust as needed
 
 #### Particle Pipeline
-1) Import `paraview.pmd` file from `output/runs/{run_folder}/diags/part_diag/paraview.pmd` 
+1) Import `paraview.pmd` file from `OUTPUT_DIR/<deck>/{run_folder}/diags/part_diag/paraview.pmd` 
 2) Click `Apply`
 #### Visualizing path lines
 3) Right-click `Particles` from the `paraview.pmd` file just imported via the `part_diag` folder in the Pipeline Browser Window

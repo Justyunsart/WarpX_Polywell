@@ -9,13 +9,15 @@ _config: dict = {}
 
 def load_config() -> dict:
     """
-    Reads the .env file from the project root (two levels above src/utils/).
+    Reads the .env file from the project root.
     Populates the module-level config dict and returns it.
     Missing keys fall back to defaults.
     """
     global _config
 
-    root = Path(__file__).resolve().parent.parent.parent
+    # config.py lives at src/warpx_polywell/utils/, so the repo root (where
+    # .env lives) is four levels up.
+    root = Path(__file__).resolve().parent.parent.parent.parent
     env_file = root / ".env"
 
     if env_file.is_file():

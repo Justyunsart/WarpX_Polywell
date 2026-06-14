@@ -30,12 +30,11 @@ Solutions for current state of the script:
 """
 
 import os
-import shutil
 
 # Pywarpx utils, plus callbacks which can be useful for diagnostic (live saving of fields for example)
 from pywarpx import picmi, callbacks, warpx
 
-from warpx_polywell.db.runs import RunsDB, new_run_dir
+from warpx_polywell.db.runs import RunsDB, allocate_run_dir
 
 from configs.polywell_hybrid_config import PolywellHybridConfig, HYBRID_CONFIG
 from warpx_polywell.domain import plasma_bounds
@@ -856,12 +855,9 @@ class PollywellSixCoilHybrid:
 
     def define_run_management(self):
 
-        script_name = "polwell_hybrid.py"
-        run_dir = new_run_dir()
-        try:
-            shutil.copy2(__file__, run_dir / script_name)
-        except Exception:
-            pass
+        # Allocate the per-deck run dir (MPI-safe), snapshot this deck, and chdir
+        # in. run() registers the run + manages status via RunsDB.run_context.
+        run_dir = allocate_run_dir(__file__)
 
         # save config as json file for easily referencing it
         self.save_cfg_to_json(self.cfg, run_dir)
@@ -888,12 +884,12 @@ class PollywellSixCoilHybrid:
             "solver_method":        getattr(self.solver, "method", None),
             # diagnostics
             "diag_period":           self.diag_period,
-            "diag_path":             str(run_dir),
+            # diag_path defaults to the run dir in register_run
         }
 
         self.run_dir = run_dir
         self.run_params = run_params
-        os.chdir(self.run_dir)
+        # allocate_run_dir already chdir'd into run_dir.
         self.sim.write_input_file("inputs_test")
 
     def run(self):

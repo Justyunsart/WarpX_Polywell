@@ -120,7 +120,12 @@ Compatible with:
 
 ```python
 from openpmd_viewer import OpenPMDTimeSeries
-ts = OpenPMDTimeSeries("output/runs/run_*/diags/diag/")
+from warpx_polywell.post.reader import run_dir
+
+# Runs live under OUTPUT_DIR/<deck>/run_<timestamp>/ (OUTPUT_DIR follows
+# LOCAL_OUTPUT_DIR in .env). Resolve one instead of hardcoding the path:
+rd = run_dir(script="polywell_input")          # latest; or run_dir(run_id=<id>)
+ts = OpenPMDTimeSeries(str(rd / "diags" / "diag"))
 Bz, info     = ts.get_field(field="B", coord="z", iteration=0)
 x, y, z, ux  = ts.get_particle(["x", "y", "z", "ux"], species="plasma_i", iteration=0)
 ```
@@ -129,6 +134,13 @@ x, y, z, ux  = ts.get_particle(["x", "y", "z", "ux"], species="plasma_i", iterat
 
 ## Post-Processing
 
-`src/warpx_polywell/post/reader.py` is a placeholder for post-processing utilities.
-It is currently empty. Analysis should be done directly via the notebooks in `tests/`
+`src/warpx_polywell/post/reader.py` provides run-locator helpers so scripts and
+notebooks find runs without hardcoding the output path:
+
+- `latest_run(script)` / `run_dir(run_id=…, script=…)` → resolve a run directory
+- `chdir_to_run(script, run_id=…)` → `cd` into a run so cwd-relative reads
+  (`diags/…`, `warpx_used_inputs`) just work
+- `open_series(script=…, name="diag")` → open the openPMD series directly
+
+Beyond that, analysis is done via the notebooks under `inputs/*/` and `tests/`,
 or custom scripts using `h5py` / `openpmd_viewer`.

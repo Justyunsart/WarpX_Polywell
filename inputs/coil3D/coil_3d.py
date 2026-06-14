@@ -40,7 +40,7 @@ class SingleCoil3DConfig:
     # Numerical stability (mirrors coil_2d.py)
     eta_bg:     float = 1.0e-7     # background resistivity (Ohm·m)
     eta_coil:   float = 1.0e3      # coil island resistivity (Ohm·m)
-    eta_H:      float = 3.0e-4     # hyper-resistivity (Ohm·m^3)
+    eta_H:      float = 9.0e-4     # hyper-resistivity (Ohm·m^3)
     n_floor_frac: float = 0.05     # n_floor as fraction of n_stream
     substeps:   int   = 100        # B-field substeps
 
@@ -76,7 +76,7 @@ class SingleCoil3DConfig:
         self.r_CF = np.sqrt((MU0 * self.I * self.R_coil**2 / (2 * np.sqrt(2 * MU0 * self.P_ram)))**(2/3) - self.R_coil**2)
         if self.r_CF < 0 or not np.isreal(self.r_CF):
             raise ValueError(f"r_CF is imaginary — P_ram too large for coil to stand off the flow. Increase I or reduce n_stream/v_drift.")
-        
+
         self.B_ref    = MU0 * self.I * self.R_coil**2 / (2 * (self.R_coil**2 + self.r_CF**2)**1.5)
         self.Omega_ci = sc.e * self.B_ref / self.m_i
         self.d_i      = sc.c / np.sqrt(self.n_stream * sc.e**2 / (sc.epsilon_0 * self.m_i))
@@ -107,20 +107,6 @@ class SingleCoil3DConfig:
         else:
             print(f"r_CF / Lx   = {self.r_CF/self.L:.2f}     (standoff inside domain)")
 
-        print(f"[gyroradius]")
-        v_ion = np.sqrt(2 * self.T_i_eV * sc.eV / sc.m_p)
-        B_coil = (MU0 * self.I) / self.dia
-        w_ci = E_C * B_coil / sc.m_p
-        print("[vion] ", v_ion)
-        print("[B_coil] ", B_coil)
-        print("[w_ci] ", w_ci)
-        r_i = v_ion / w_ci 
-        print(f"[gyroradius] {r_i*100:.3f} cm")
-        w_pi = np.sqrt(self.p_density * E_C**2 / (EPS0 * sc.m_p))
-        inertial_length = (sc.c / w_pi)
-        print(inertial_length*100)
-        exit()
-
 cfg = SingleCoil3DConfig()
 
 grid = picmi.Cartesian3DGrid(
@@ -137,7 +123,7 @@ grid = picmi.Cartesian3DGrid(
 import warpx_polywell.bext.analytic as analytic
 
 analytic.POLYWELL_COILS = [('x', 1, 1)]
-A_external = analytic.build_aext_expressions(I=cfg.I, dia=cfg.dia, offset=0.0, eps=cfg.eps)
+A_external = analytic.build_aext_expressions(I=cfg.I, dia=cfg.dia, offset=0.0)
 print(A_external)
 
 solver = picmi.HybridPICSolver(
@@ -188,8 +174,7 @@ stream_i = picmi.Species(
     warpx_save_particles_at_zhi = True
 )
 
-# TODO: Increasing n_macroparticles_per_cell could decrease noise, going to try bumping to 5, though this is more computationally expensive
-layout = picmi.PseudoRandomLayout(n_macroparticles_per_cell=5, grid=grid)
+layout = picmi.PseudoRandomLayout(n_macroparticles_per_cell=4, grid=grid)
 
 PERIOD = 10
 
@@ -240,26 +225,8 @@ sim = picmi.Simulation(
     max_steps=MAX_STEPS,
     verbose=True,
     particle_shape="linear",
-    warpx_grid_type="collocated",   # recommended for hybrid,
-    # NOTE: Filtering may not work, but interesting to note it is a filter as a function of wavenumber
-    # NOTE: This did not work at 2, it may be sufficient to have one pass
-    # NOTE: Tried: npass_each_dim = [2, 2, 2], broke around 426
-    # NOTE: Tried: [3, 3, 3], boke around 485
-    # NOTE: Tried [1, 1, 1], broke around 468
-    # WarpX implements a strided filter, allowing for optimal high-pass filtering
-    # They use techniques from Vay et al 2011 which show that strided filtering (n-stride filter -> smooth with neighbors a distance n away from current point)
-    # doing a combination of 1-, 2-, 3-, 4-stride n-pass filtering was beneficial in paralelization and speed.
-    # doi:10.1016/J.Jcp.2011.04.003
-    # Becomes a suppression of the signal at integer multiples of the Nyquist wavelength
-    # Wide-band, low-pass filter
-    # The gain is a function of wavenumber, $g = \alpha + (1-\alpha)\cos(kx)$
-    # The binomial filter uses alpha = 0.5
-    # Ideally we have total attenuation ~ 1 for physics we care about, and ~ 0 for unphysical waves
-    # Due to the formula, k->0 implies g = 1, while k -> 2dx -> g = 0.5 - 0.5 = 0
-    # Then a compensation is added, to bring back low wavenumber waves, while keeping the damping on the high wavenumbers
-    warpx_use_filter=True # Bilinear filtering smooths the charge and currents on the mesh, after depositing them from the macro-particles
+    warpx_grid_type="collocated",   # recommended for hybrid
 )
-warpx.filter_npass_each_dir = [3, 3, 3]
 sim.add_species(background_i, layout=layout)
 sim.add_species(stream_i, layout=layout)
 sim.add_diagnostic(field_diag)
@@ -348,12 +315,9 @@ from pywarpx.callbacks import installafterdiagnostics
 
 installafterdiagnostics(save_cusp_losses)
 
-import os
-import time
-
-os.chdir('./inputs/coil3D')
-new_run_dir = f"runs_{time.time()}"
-os.makedirs(new_run_dir, exist_ok=True)
-os.chdir(new_run_dir)
-
-sim.step()
+# Group output under OUTPUT_DIR/coil_3d/run_* and register the run. run_session
+# chdir's into the run dir (so diagnostics + the cusp-flux callback land inside),
+# marks it completed on clean exit, and removes it on failure.
+from warpx_polywell.db.runs import run_session
+with run_session(__file__, {}):
+    sim.step()

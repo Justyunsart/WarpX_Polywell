@@ -108,9 +108,14 @@ Mode-specific differences (full vs octant) all flow out of `derive_domain` so do
 `make_layout(mode, …)` dispatches between `picmi.GriddedLayout` (density mode) and `picmi.PseudoRandomLayout` (count mode). See [spawn module](../modules/spawn.md).
 
 ### `src/warpx_polywell/db/runs.py`
-SQLite database at `output/runs.db` indexing every run with full parameter capture, status, git commit, and diagnostic path. Includes `_MIGRATIONS` for in-place column additions and `scan_existing()` for backfilling pre-DB runs.
+SQLite database at `OUTPUT_DIR/runs.db` indexing every run with full parameter capture, status, git commit, originating deck (`script`), and diagnostic path. `new_run_dir()` groups runs per deck under `OUTPUT_DIR/<deck>/run_<timestamp>/`. Includes `_MIGRATIONS` for in-place column additions and `scan_existing()` for backfilling pre-DB runs.
 
-### `output/bext/`
+### The output base (`OUTPUT_DIR`)
+All generated output is rooted at `OUTPUT_DIR`, which follows `LOCAL_OUTPUT_DIR`
+in `.env` and defaults to `<repo>/output`. It holds `runs.db`, the per-deck run
+dirs, and the `bext/` field cache.
+
+### `OUTPUT_DIR/bext/`
 Auto-generated at runtime. Stores cached HDF5 field files. File names encode all
 parameters (current, diameter, offset, grid length, resolution) so the correct file
 can be located on repeat runs without recomputation.

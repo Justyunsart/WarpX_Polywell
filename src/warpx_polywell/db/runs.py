@@ -40,17 +40,22 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from warpx_polywell.utils.paths import ROOT_DIR
+from warpx_polywell.utils.paths import ROOT_DIR, OUTPUT_DIR
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-RUNS_DIR = ROOT_DIR / "output" / "runs"
-DB_PATH = ROOT_DIR / "output" / "runs.db"
+# Runs are grouped per deck directly under the configured output base:
+#   OUTPUT_DIR/<deck>/run_<timestamp>/
+# RUNS_DIR is that base (the parent of the per-deck dirs); the DB lives beside
+# them. Both follow LOCAL_OUTPUT_DIR via paths.OUTPUT_DIR.
+RUNS_DIR = OUTPUT_DIR
+DB_PATH = OUTPUT_DIR / "runs.db"
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -103,6 +108,7 @@ CREATE TABLE IF NOT EXISTS runs (
     diag_path           TEXT,
 
     -- misc
+    script              TEXT,
     notes               TEXT,
     git_commit          TEXT
 );
@@ -116,6 +122,7 @@ _INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_runs_b_method   ON runs(b_method)",
     "CREATE INDEX IF NOT EXISTS idx_runs_e_method   ON runs(e_method)",
     "CREATE INDEX IF NOT EXISTS idx_runs_use_hybrid ON runs(use_hybrid)",
+    "CREATE INDEX IF NOT EXISTS idx_runs_script     ON runs(script)",
 ]
 
 # Columns added after the original schema. (column_name, ddl_type) -- applied
@@ -126,6 +133,7 @@ _MIGRATIONS: list[tuple[str, str]] = [
     ("particle_mode", "TEXT NOT NULL DEFAULT 'density'"),
     ("n_test_particles_per_cell", "INTEGER"),
     ("use_hybrid", "INTEGER NOT NULL DEFAULT 0"),
+    ("script", "TEXT"),
 ]
 
 # Columns removed from the schema. Dropped via ALTER TABLE on existing DBs;
@@ -204,6 +212,11 @@ class RunsDB:
         # Default diag_path to the run dir itself
         if "diag_path" not in p or p["diag_path"] is None:
             p["diag_path"] = str(run_dir)
+
+        # Derive the originating deck from the run dir's parent (the per-deck
+        # grouping created by new_run_dir, e.g. .../polywell_input/run_*).
+        if "script" not in p or p["script"] is None:
+            p["script"] = Path(run_dir).parent.name
 
         columns = ["run_dir"] + list(p.keys())
         placeholders = ", ".join(["?"] * len(columns))
@@ -419,9 +432,12 @@ class RunsDB:
     # ------------------------------------------------------------------
 
     def scan_existing(self, runs_root=None, verbose=True):
-        """Walk output/runs/run_* dirs and insert any not yet in the DB.
+        """Walk the per-deck run tree and insert any runs not yet in the DB.
 
-        Parameter extraction order (first hit wins per key):
+        Looks for run_* dirs both one level down (``<root>/<deck>/run_*``, the
+        current layout) and directly under *root* (``<root>/run_*``, a legacy or
+        externally-pointed flat layout). Parameter extraction order
+        (first hit wins per key):
           1. run_metadata.json sidecar (written by register_run)
           2. AST parse of the polywell_input.py snapshot in the run dir
         Status is inferred from diags/ contents when not already known.
@@ -435,9 +451,7 @@ class RunsDB:
             return 0
 
         added = 0
-        for sub in sorted(root.iterdir()):
-            if not sub.is_dir() or not sub.name.startswith("run_"):
-                continue
+        for sub in _iter_run_dirs(root):
             if self.get_run_by_dir(sub):
                 continue  # already registered
 
@@ -473,15 +487,25 @@ class RunsDB:
 # Module-level helpers
 # ---------------------------------------------------------------------------
 
-def new_run_dir(parent: Path | None = None) -> Path:
-    """Create output/runs/run_YYYYMMDD_HHMMSS/ and return its absolute Path.
+def new_run_dir(script: str | None = None, parent: Path | None = None) -> Path:
+    """Create OUTPUT_DIR/<deck>/run_YYYYMMDD_HHMMSS/ and return its abs Path.
+
+    The deck name groups runs by the driver that produced them. It defaults to
+    the stem of the running script (``sys.argv[0]``) so callers need no
+    boilerplate — ``python inputs/polywell_input.py`` lands runs under
+    ``OUTPUT_DIR/polywell_input/``. Pass *script* to override (a bare name or a
+    filename like ``"coil_2d.py"`` both work — only the stem is used).
 
     If a directory with that name already exists (e.g. two runs launched in
     the same second), an integer suffix _2, _3, ... is appended so each call
-    returns a fresh, empty directory.
+    returns a fresh, empty directory. *parent* overrides the base dir entirely.
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base = Path(parent) if parent is not None else RUNS_DIR
+    if parent is not None:
+        base = Path(parent)
+    else:
+        deck = Path(script).stem if script else (Path(sys.argv[0]).stem or "unknown")
+        base = OUTPUT_DIR / deck
     base.mkdir(parents=True, exist_ok=True)
 
     run_dir = base / f"run_{timestamp}"
@@ -491,6 +515,108 @@ def new_run_dir(parent: Path | None = None) -> Path:
         suffix += 1
     run_dir.mkdir(parents=True)
     return run_dir
+
+
+def _mpi_comm_rank():
+    """Return (comm, rank) using mpi4py if available, else (None, 0).
+
+    Imported lazily so the package never hard-depends on mpi4py; the conda
+    WarpX stack provides it, and a non-MPI run falls back to a single rank.
+    """
+    try:
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+        return comm, comm.Get_rank()
+    except Exception:
+        return None, 0
+
+
+def allocate_run_dir(script: str | None = None, *, copy_from=None,
+                     chdir: bool = True) -> Path:
+    """MPI-safe allocation of a per-deck run directory.
+
+    Creates ``OUTPUT_DIR/<deck>/run_<timestamp>/`` once on rank 0 and broadcasts
+    the path so every rank agrees. Optionally ``chdir`` into it (all ranks — so
+    WarpX's relative diagnostic writes land inside) and snapshot the deck file
+    into it (rank 0 only).
+
+    *script* names the deck (its stem is the grouping dir); pass ``__file__``.
+    *copy_from* overrides what gets snapshotted (defaults to *script* when it is
+    an existing file). Returns the run dir, identical on all ranks.
+    """
+    comm, rank = _mpi_comm_rank()
+    run_dir = new_run_dir(script=script) if rank == 0 else None
+    if comm is not None:
+        run_dir = comm.bcast(run_dir, root=0)
+    if chdir:
+        os.chdir(run_dir)
+    if rank == 0:
+        src = copy_from or (script if script and os.path.isfile(str(script)) else None)
+        if src:
+            try:
+                shutil.copy2(src, run_dir / Path(str(src)).name)
+            except Exception:
+                pass
+    return run_dir
+
+
+@contextmanager
+def run_session(script: str | None = None, params: dict | None = None, *,
+                copy_from=None):
+    """Full deck-run lifecycle as a context manager — the shared entry point
+    every deck should use.
+
+        with run_session(__file__, run_params) as run_dir:
+            sim.step()
+
+    Allocates the run dir (MPI-safe), chdir's into it, snapshots the deck, and
+    registers the run when *params* is given. On clean exit the run is marked
+    ``completed``; on any exception its DB row and directory are removed (rank 0
+    only) so failed runs leave no trace. The original cwd is always restored, so
+    keep run-relative work (post-step dumps, etc.) inside the ``with`` block.
+    """
+    comm, rank = _mpi_comm_rank()
+    prev_cwd = os.getcwd()
+    run_dir = allocate_run_dir(script, copy_from=copy_from, chdir=True)
+
+    db = RunsDB() if rank == 0 else None
+    run_id = db.register_run(run_dir, params) if (rank == 0 and params is not None) else None
+    if rank == 0:
+        print(f"[runs.db] run id={run_id} at {run_dir}")
+    try:
+        yield run_dir
+    except BaseException:
+        os.chdir(prev_cwd)
+        if rank == 0:
+            if run_id is not None:
+                db.delete_run(run_id)
+            shutil.rmtree(run_dir, ignore_errors=True)
+            db.close()
+        raise
+    else:
+        if rank == 0:
+            if run_id is not None:
+                db.update_status(run_id, "completed")
+            db.close()
+        os.chdir(prev_cwd)
+
+
+def _iter_run_dirs(root: Path):
+    """Yield run_* directories under *root*.
+
+    Supports both the per-deck layout (``root/<deck>/run_*``) and a flat layout
+    (``root/run_*``). Non-run subdirectories (e.g. ``bext/``) are descended one
+    level to find their run_* children; we never recurse deeper.
+    """
+    for child in sorted(root.iterdir()):
+        if not child.is_dir():
+            continue
+        if child.name.startswith("run_"):
+            yield child
+            continue
+        for sub in sorted(child.iterdir()):
+            if sub.is_dir() and sub.name.startswith("run_"):
+                yield sub
 
 
 def _timestamp_from_dirname(dirname: str):
@@ -532,7 +658,7 @@ _BACKFILL_COLUMNS = {
     "particle_mode", "n_test_particles_per_cell",
     "solver_type", "solver_method", "cfl", "use_hybrid",
     "diag_period", "diag_path",
-    "notes", "git_commit",
+    "script", "notes", "git_commit",
 }
 
 
@@ -572,6 +698,9 @@ def _extract_params_from_dir(run_dir):
 
     # --- 4. Always refresh diag_path to the actual location ---
     params["diag_path"] = str(run_dir)
+
+    # --- 5. Deck name from the per-deck grouping dir (sidecar wins if present) ---
+    params.setdefault("script", run_dir.parent.name)
     return params
 
 
