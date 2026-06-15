@@ -161,7 +161,7 @@ def B_polywell(X, Y, Z, I, dia, offset):
 #   AMReX:  K = comp_ellint_1(k) where k = sqrt(m)
 # ================================================================
 
-def _coil_var_defs(tag, axis, pos, a):
+def _coil_var_defs(tag, axis, pos, a, eps=1e-30):
     """
     Build local-variable assignment strings for a single coil.
 
@@ -182,22 +182,22 @@ def _coil_var_defs(tag, axis, pos, a):
     if axis == 'z':
         r2_rhs  = "x*x+y*y"
         z_rhs   = f"z-({pos:.15e})"
-        ct_rhs  = f"x/(r_{tag}+1e-30)"
-        st_rhs  = f"y/(r_{tag}+1e-30)"
+        ct_rhs  = f"x/(r_{tag}+{eps})"
+        st_rhs  = f"y/(r_{tag}+{eps})"
     elif axis == 'x':
         r2_rhs  = "z*z+y*y"
         z_rhs   = f"x-({pos:.15e})"
-        ct_rhs  = f"z/(r_{tag}+1e-30)"
-        st_rhs  = f"y/(r_{tag}+1e-30)"
+        ct_rhs  = f"z/(r_{tag}+{eps})"
+        st_rhs  = f"y/(r_{tag}+{eps})"
     elif axis == 'y':
         r2_rhs  = "z*z+x*x"
         z_rhs   = f"y-({pos:.15e})"
-        ct_rhs  = f"z/(r_{tag}+1e-30)"
-        st_rhs  = f"x/(r_{tag}+1e-30)"
+        ct_rhs  = f"z/(r_{tag}+{eps})"
+        st_rhs  = f"x/(r_{tag}+{eps})"
 
     return [
         f"r2_{tag}={r2_rhs}",
-        f"r_{tag}=sqrt(r2_{tag}+1e-30)",
+        f"r_{tag}=sqrt(r2_{tag}+{eps**2})",
         f"z_{tag}={z_rhs}",
         f"ct_{tag}={ct_rhs}",
         f"st_{tag}={st_rhs}",
@@ -285,7 +285,7 @@ def build_bext_expressions(I, dia, offset):
         'Bz': preamble + "; " + "+".join(Bz_terms),
     }
 
-def _coil_aext_term(tag, axis, component, eps=1e-30):
+def _coil_aext_term(tag, axis, component):
     """
     Return the expression fragment for one coil's contribution to a
     Cartesian component (Ax, Ay, or Az) using phi_hat projection.
@@ -295,10 +295,11 @@ def _coil_aext_term(tag, axis, component, eps=1e-30):
     # axis='z': Ax=-Aphi*y/r,  Ay=+Aphi*x/r,  Az=0
     # axis='x': Ax=0,          Ay=-Aphi*z/r,  Az=+Aphi*y/r
     # axis='y': Ax=+Aphi*z/r,  Ay=0,          Az=-Aphi*x/r
+    # Note, r_tag is already eps adjusted
     mapping = {
-        'z': {'Ax': f"-Aphi_{tag}*y/(r_{tag}+{eps})",  'Ay': f"Aphi_{tag}*x/(r_{tag}+{eps})",   'Az': "0.0"},
-        'x': {'Ax': "0.0",                              'Ay': f"-Aphi_{tag}*z/(r_{tag}+{eps})",  'Az': f"Aphi_{tag}*y/(r_{tag}+{eps})"},
-        'y': {'Ax': f"Aphi_{tag}*z/(r_{tag}+{eps})",   'Ay': "0.0",                              'Az': f"-Aphi_{tag}*x/(r_{tag}+{eps})"},
+        'z': {'Ax': f"-Aphi_{tag}*y/(r_{tag})",  'Ay': f"Aphi_{tag}*x/(r_{tag})",   'Az': "0.0"},
+        'x': {'Ax': "0.0",                              'Ay': f"-Aphi_{tag}*z/(r_{tag})",  'Az': f"Aphi_{tag}*y/(r_{tag})"},
+        'y': {'Ax': f"Aphi_{tag}*z/(r_{tag})",   'Ay': "0.0",                              'Az': f"-Aphi_{tag}*x/(r_{tag})"},
     }
     return mapping[axis][component]
 
@@ -319,7 +320,7 @@ def build_aext_expressions(I, dia, offset, eps=1e-30):
         coil_I = I_sign * I
 
         B_only_prefixes = ('ct_', 'st_', 'Bax_', 'Br_')
-        var_defs = [v for v in _coil_var_defs(tag, axis, pos, a)
+        var_defs = [v for v in _coil_var_defs(tag, axis, pos, a, eps)
                     if not any(v.startswith(p) for p in B_only_prefixes)]
         var_defs.append(
             f"Aphi_{tag}={MU0:.15e}/{np.pi:.15e}"
@@ -328,9 +329,9 @@ def build_aext_expressions(I, dia, offset, eps=1e-30):
         )
         preamble = "; ".join(var_defs)
 
-        ax_term = _coil_aext_term(tag, axis, 'Ax', eps)
-        ay_term = _coil_aext_term(tag, axis, 'Ay', eps)
-        az_term = _coil_aext_term(tag, axis, 'Az', eps)
+        ax_term = _coil_aext_term(tag, axis, 'Ax')
+        ay_term = _coil_aext_term(tag, axis, 'Ay')
+        az_term = _coil_aext_term(tag, axis, 'Az')
 
         coils[f'coil_{tag}'] = {
             'Ax_external_function': preamble + "; " + (f"{coil_I:.15e}*({ax_term})" if ax_term != "0.0" else "0.0"),
