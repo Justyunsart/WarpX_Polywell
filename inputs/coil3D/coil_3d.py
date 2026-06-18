@@ -30,7 +30,7 @@ class SingleCoil3DConfig:
 
     # Coil params (coil sits at x=0, axis along x)
     I:          float = 1e5        # A
-    dia:        float = 0.5        # m
+    dia:        float = 1.5        # m
 
     # Grid
     # Increasing L softens coil B-field anomaly (eps = dx = L / N)

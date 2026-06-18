@@ -322,10 +322,16 @@ def build_aext_expressions(I, dia, offset, eps=1e-30):
         B_only_prefixes = ('ct_', 'st_', 'Bax_', 'Br_')
         var_defs = [v for v in _coil_var_defs(tag, axis, pos, a, eps)
                     if not any(v.startswith(p) for p in B_only_prefixes)]
+        # A_phi = (mu0 I)/(pi k) * sqrt(a/rho) * [(1 - k^2/2) K(k) - E(k)]
+        # (I folded in by the caller). The geometric prefactor sqrt(a/rho) is
+        # dimensionless; an earlier version used 1/beta (=1/sb) here, which has
+        # units of 1/length and made B=curl(A) wrong by a position-dependent
+        # factor (~2x, and ~3x too weak on-axis).
         var_defs.append(
             f"Aphi_{tag}={MU0:.15e}/{np.pi:.15e}"
+            f"*sqrt({a:.15e}/(r_{tag}+1e-30))"
             f"*((1.0-0.5*k_{tag}**2)*K_{tag}-E_{tag})"
-            f"/(sqrt(k_{tag}**2+1e-30)*sb_{tag})"
+            f"/sqrt(k_{tag}**2+1e-30)"
         )
         preamble = "; ".join(var_defs)
 

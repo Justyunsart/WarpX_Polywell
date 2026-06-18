@@ -42,8 +42,8 @@ T_e_eV   = 10.0            # electron FLUID temperature (hybrid input)
 T_i_eV   = 10.0            # ion thermal spread on injection
 
 # Line-dipole geometry: two infinite wires along y at z = +/- d/2.
-I_line   = 1e5           # A per wire (anti-parallel)
-d_sep    = 0.5            # m
+I_line   = 3e5           # A per wire (anti-parallel)
+d_sep    = 1.5            # m
 
 # Derived
 m_i   = sc.m_p
@@ -62,6 +62,12 @@ Omega_ci    = sc.e * B_ref / m_i
 eta_bg   = 1.0e-7        # your background value
 eta_coil = 1.0e3         # high-resistivity coil interior (tune)
 w        = 7.8e-2        # mask width ~ one cell, matches your eps
+
+Lx = 2.5     # m (half-extent) — sized to ~1.4 × r_CF
+Lz = 2.5     # m
+Nx = 64      # dx ≈ 7.8 cm — resolves r_CF with ~22 cells, d_i with ~29, ρ_i,drift with ~21
+Nz = 64      # ρ_i,thermal ≈ 1.8 cells (under-resolved — fine for standoff, refine for sheath)
+
 
 print(f"P_ram       = {P_ram:.3e} Pa")
 print(f"r_CF        = {r_CF*100:.2f} cm  (predicted standoff)")
@@ -84,7 +90,7 @@ dh  = d_sep / 2.0
 # Smooth over one full cell (dx = 2*Lx/Nx = 5/64 ≈ 0.078 m). This caps the peak |B|
 # in the wire cell at ~μ₀·I/(2π·ε) ≈ 0.13 T (with I_line=5e4) — comfortable for the
 # B-substep CFL. Since ε << d_sep/2, the far-field dipole structure at r_CF is preserved.
-eps = 7.8e-2   # m  (~ one cell at 64² resolution)
+eps = 2*Lx/Nx   # m  (~ one cell at 64² resolution)
 
 Ay_expr = (
     f"{K} * log( (x*x + (z+{dh})*(z+{dh}) + {eps*eps})"
@@ -121,11 +127,6 @@ A_external = {
 # `warpx_max_grid_size=16` on a 64² domain gives 16 grids (4×4) — enough decomposition to keep MPI ranks / OpenMP tiles fed.
 
 # %%
-Lx = 2.5     # m (half-extent) — sized to ~1.4 × r_CF
-Lz = 2.5     # m
-Nx = 64      # dx ≈ 7.8 cm — resolves r_CF with ~22 cells, d_i with ~29, ρ_i,drift with ~21
-Nz = 64      # ρ_i,thermal ≈ 1.8 cells (under-resolved — fine for standoff, refine for sheath)
-
 grid = picmi.Cartesian2DGrid(
     number_of_cells=[Nx, Nz],
     lower_bound=[-Lx, -Lz],
@@ -144,9 +145,9 @@ solver = picmi.HybridPICSolver(
     gamma=5.0/3.0,
     n_floor=0.05 * n_stream,                 # 5% of upstream — caps 1/n amplification in the deepening cavity
     plasma_resistivity=eta_bg,               # uniform; coil islands emulated via callback
-    plasma_hyper_resistivity=3.0e-3,         # Ohm·m^3; overdamps grid-Nyquist whistlers at peak |B|~0.13T
+    plasma_hyper_resistivity=9.0e-4,         # Ohm·m^3; matches coil_3d (overdamps grid-Nyquist whistlers at peak |B|)
     holmstrom_vacuum_region=True,            # suppress Hall/pressure terms in the cavity
-    substeps=100,                           # dt_sub ≈ 3e-11 s; clears whistler CFL at peak |B| with ~3x margin
+    substeps=500,                           # dt_sub ≈ 3e-11 s; clears whistler CFL at peak |B| with ~3x margin
     A_external=A_external,
     do_external_diva_cleaning=False,         # A is analytically div-free
 )
@@ -166,9 +167,9 @@ MAX_STEPS = 1000
 dx       = (2.0 * Lx) / Nx
 ve_th    = np.sqrt(T_e_eV * sc.eV / sc.m_e)   # electron-fluid thermal speed
 
-dt_cyclo = 1.0 / (50.0 * Omega_ci)            # ~1/50 of ion gyroperiod at r_CF
-dt_cross = 0.5 * dx / ve_th                   # half-cell at electron thermal speed
-const_dt = dt_cyclo
+dt_cyclo  = 1.0 / (50.0 * Omega_ci)           # ~1/50 of ion gyroperiod at r_CF
+dt_efluid = 0.4 * dx / ve_th                  # 0.4-cell at electron-fluid thermal speed (matches coil_3d)
+const_dt  = min(dt_cyclo, dt_efluid)          # matches coil_3d dt selection
 
 warpx.const_dt = const_dt
 
@@ -177,8 +178,8 @@ transits  = t_sim * v_drift / (2.0 * Lx)
 
 print(f"dx          = {dx*1e2:.2f} cm")
 print(f"dt (cyclo)  = {dt_cyclo:.3e} s")
-#print(f"dt (cross)  = {dt_cross:.3e} s")
-print(f"const_dt    = {const_dt:.3e} s   <- min(cyclo, cross)")
+print(f"dt (efluid) = {dt_efluid:.3e} s")
+print(f"const_dt    = {const_dt:.3e} s   <- min(cyclo, efluid)")
 print(f"sim time    = {t_sim*1e6:.2f} us  ({MAX_STEPS} steps)")
 print(f"transits    = {transits:.2f}     (need >~3-5 for steady-state standoff)")
 if r_CF > Lx:
@@ -306,24 +307,42 @@ def damp_current_at_coils():
 installafterdeposition(damp_current_at_coils)
 
 # %% [markdown]
-# ## Non-perturbing midplane flux counter
+# ## Non-perturbing flux counters (cusp + up/downstream probes)
 #
-# Instead of an absorbing boundary, we measure ion loss across the line segment
-# joining the two coils (`x=0, |z| < d/2`) with a read-only `afterstep` callback.
-# It only *reads* the live particle arrays, so the run is bit-for-bit identical to
-# one without it. Crossing rate is the standard "flux through a plane" estimator:
-# for particles momentarily inside a one-cell-wide slab `|x| < L/2` straddling the
-# plane, `rate = Σ w·|v_x| / L`, split by sign of `v_x`. A particle drifts
+# Instead of an absorbing boundary, we measure ion loss across line segments with a
+# read-only `afterstep` callback. The primary segment joins the two coils
+# (`x=0, |z| < d/2`); two extra probes sit a tunable distance `probe_offset` in
+# front of (`+x`, upstream toward the incoming flow) and behind (`-x`, downstream)
+# the cusp, each the **same length** (`|z| < d/2`). The callback only *reads* the
+# live particle arrays, so the run is bit-for-bit identical to one without it.
+# Crossing rate is the standard "flux through a plane" estimator: for particles
+# momentarily inside a one-cell-wide slab `|x - x0| < L/2` straddling a plane,
+# `rate = Σ w·|v_x| / L`, split by sign of `v_x`. A particle drifts
 # `v·dt ≈ 0.01 m ≪ L ≈ 0.078 m` per step, so it sits in the slab for ~8 steps and
 # is never skipped; integrating `rate·dt` recovers ~`w` per crossing. `rate_minus`
-# (v_x<0, downstream toward the midplane) is the leak that penetrates the standoff;
-# `rate_plus` is the return flux. Output: `diags/segment_flux.npz`.
+# (v_x<0, downstream) is the leak that penetrates the standoff; `rate_plus` is the
+# return flux. Output: `diags/segment_flux.npz`, with per-plane keys
+# `rate_{minus,plus}_{cusp,front,behind}`.
 
 # %%
 from pywarpx.callbacks import installafterstep
 
 _seg_L = 2.0 * Lx / Nx                 # slab width ≈ one cell (dx)
-_seg_t, _seg_minus, _seg_plus = [], [], []
+
+# Probe planes for the flux counter. Each is a line segment of the SAME length as
+# the cusp (transverse extent |z| < dh), placed at a tunable distance
+# `probe_offset` in front of (+x, upstream) and behind (-x, downstream) the cusp
+# at x=0. Keep the off-cusp planes inside the domain: probe_offset + 0.5*_seg_L < Lx.
+probe_offset = 0.01                     # m, up/downstream probe distance from cusp
+_seg_planes = [                        # (label, plane x-position)
+    ("cusp",   0.0),
+    ("front", +probe_offset),
+    ("behind", -probe_offset),
+]
+
+_seg_t = []
+_seg_minus = {name: [] for name, _ in _seg_planes}
+_seg_plus  = {name: [] for name, _ in _seg_planes}
 _seg_n = [0]                           # mutable step counter (closure-friendly)
 _seg_state = {}                        # lazily-cached containers + ParIter
 
@@ -356,20 +375,32 @@ def count_segment_flux():
         _seg_state["pc"] = {s: sim.particles.get(s)
                             for s in ("background_i", "stream_i")}
     parit = _seg_state["parit"]
-    rminus = rplus = 0.0
+
+    # Gather every ion once (both species), then test each probe plane against the
+    # same arrays — cheaper than re-gathering per plane.
+    xs, zs, vs, ws = [], [], [], []
     for container in _seg_state["pc"].values():
         x, z, vx, wt = _seg_gather(container, parit)   # vx = u ≈ v_x (non-rel)
-        if x.size == 0:
-            continue
-        m = (np.abs(x) < 0.5 * _seg_L) & (np.abs(z) < dh)
-        if m.any():
-            vm = vx[m]; wm = wt[m]
-            neg = vm < 0
-            rminus += float(np.sum(wm[neg]  * -vm[neg])) / _seg_L
-            rplus  += float(np.sum(wm[~neg] *  vm[~neg])) / _seg_L
+        if x.size:
+            xs.append(x); zs.append(z); vs.append(vx); ws.append(wt)
+    if xs:
+        x = np.concatenate(xs); z = np.concatenate(zs)
+        vx = np.concatenate(vs); wt = np.concatenate(ws)
+    else:
+        x = z = vx = wt = np.empty(0)
+
+    for name, x0 in _seg_planes:
+        rminus = rplus = 0.0
+        if x.size:
+            m = (np.abs(x - x0) < 0.5 * _seg_L) & (np.abs(z) < dh)
+            if m.any():
+                vm = vx[m]; wm = wt[m]
+                neg = vm < 0
+                rminus = float(np.sum(wm[neg]  * -vm[neg])) / _seg_L
+                rplus  = float(np.sum(wm[~neg] *  vm[~neg])) / _seg_L
+        _seg_minus[name].append(rminus)
+        _seg_plus[name].append(rplus)
     _seg_t.append(_seg_n[0] * const_dt)
-    _seg_minus.append(rminus)
-    _seg_plus.append(rplus)
     _seg_n[0] += 1
 
 installafterstep(count_segment_flux)
@@ -386,20 +417,31 @@ with run_session(__file__, {"max_steps": MAX_STEPS}):
     try:
         from mpi4py import MPI
         _comm = MPI.COMM_WORLD
-        _seg_minus = _comm.allreduce(np.asarray(_seg_minus), op=MPI.SUM)
-        _seg_plus = _comm.allreduce(np.asarray(_seg_plus), op=MPI.SUM)
+        for name, _ in _seg_planes:
+            _seg_minus[name] = _comm.allreduce(np.asarray(_seg_minus[name]), op=MPI.SUM)
+            _seg_plus[name]  = _comm.allreduce(np.asarray(_seg_plus[name]),  op=MPI.SUM)
         _is_root = _comm.Get_rank() == 0
     except Exception:
         _is_root = True
     if _is_root:
         os.makedirs("diags", exist_ok=True)
-        np.savez(os.path.join("diags", "segment_flux.npz"),
-                 t_s=np.asarray(_seg_t, dtype=float),
-                 rate_minus=np.asarray(_seg_minus, dtype=float),
-                 rate_plus=np.asarray(_seg_plus, dtype=float),
-                 dh=dh, slab_L=_seg_L)
+        _save = {
+            "t_s": np.asarray(_seg_t, dtype=float),
+            "dh": dh, "slab_L": _seg_L,
+            "probe_offset": probe_offset,
+            "plane_names": np.asarray([n for n, _ in _seg_planes]),
+            "plane_x": np.asarray([x0 for _, x0 in _seg_planes], dtype=float),
+        }
+        for name, _ in _seg_planes:
+            _save[f"rate_minus_{name}"] = np.asarray(_seg_minus[name], dtype=float)
+            _save[f"rate_plus_{name}"]  = np.asarray(_seg_plus[name],  dtype=float)
+        # Back-compat aliases: the cusp plane keeps the original key names.
+        _save["rate_minus"] = _save["rate_minus_cusp"]
+        _save["rate_plus"]  = _save["rate_plus_cusp"]
+        np.savez(os.path.join("diags", "segment_flux.npz"), **_save)
         print(f"[segment_flux] wrote diags/segment_flux.npz "
-              f"({len(_seg_t)} steps, peak rate_minus={np.max(_seg_minus):.3e})")
+              f"({len(_seg_t)} steps, {len(_seg_planes)} planes, "
+              f"peak rate_minus_cusp={np.max(_seg_minus['cusp']):.3e})")
 
 # %% [markdown]
 # ## Post-processing sketch — β_dyn = 1 vs. Chapman–Ferraro
