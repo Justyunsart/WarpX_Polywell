@@ -55,8 +55,9 @@ class Polywell:
     diameter : coil diameter, in metres.
     offset   : distance from origin to each coil centre, in metres.
 
-    `expand()` reproduces the layout previously hardcoded as
-    analytic.POLYWELL_COILS: (axis, position sign, current sign) =
+    This is now the single source of truth for the layout (formerly the
+    hardcoded analytic.POLYWELL_COILS). `expand()` yields, as
+    (axis, position sign, current sign):
     (x,-,-) (x,+,+) (y,-,-) (y,+,+) (z,-,-) (z,+,+).
     """
     current: float

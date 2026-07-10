@@ -26,16 +26,10 @@ from scipy.special import ellipk, ellipe
 
 MU0 = 4e-7 * np.pi
 
-# Default polywell coil layout, matching make_collection.py
-# Each entry: (axis, signed_position, current_sign_multiplier)
-POLYWELL_COILS = [
-    ('x', -1,  -1),   # s1: X-axis at -offset, current -I
-    ('x',  1, 1),   # s2: X-axis at +offset, current +I
-    ('y', -1, -1),   # s3: Y-axis at -offset, current -I
-    ('y',  1,  1),   # s4: Y-axis at +offset, current +I
-    ('z', -1,  -1),   # s5: Z-axis at -offset, current -I
-    ('z',  1,  1),   # s6: Z-axis at +offset, current +I
-]
+# The polywell coil layout now lives in warpx_polywell.coils.Polywell — it is the
+# single source of truth. NumPy and parser-expression builders below all consume
+# a list[Loop], so any coil configuration (single coil, washer, ...) is expressed
+# by passing the appropriate loops rather than mutating a module-level layout.
 
 
 # ================================================================
@@ -112,22 +106,19 @@ def _eval_loop_cartesian(X, Y, Z, axis, pos, a, I):
         return Br * np.sin(theta), Bax, Br * np.cos(theta)
 
 
-def B_polywell(X, Y, Z, I, dia, offset):
+def B_from_loops(X, Y, Z, loops):
     """
-    Total B-field from a 6-coil polywell (NumPy evaluation).
+    Total B-field from an arbitrary `list[Loop]` (NumPy evaluation).
 
     Parameters
     ----------
     X, Y, Z : observation coordinates (scalars or arrays)
-    I       : coil current (A)
-    dia     : coil diameter (m)
-    offset  : coil center distance from origin (m)
+    loops   : iterable of warpx_polywell.coils.Loop
 
     Returns
     -------
     Bx, By, Bz : Cartesian field components
     """
-    a = dia / 2
     X = np.asarray(X, dtype=float)
     Y = np.asarray(Y, dtype=float)
     Z = np.asarray(Z, dtype=float)
@@ -135,13 +126,29 @@ def B_polywell(X, Y, Z, I, dia, offset):
     By = np.zeros_like(X)
     Bz = np.zeros_like(X)
 
-    for axis, pos_sign, I_sign in POLYWELL_COILS:
-        bx, by, bz = _eval_loop_cartesian(X, Y, Z, axis, pos_sign * offset, a, I_sign * I)
+    for lp in loops:
+        bx, by, bz = _eval_loop_cartesian(X, Y, Z, lp.axis, lp.position, lp.radius, lp.current)
         Bx += bx
         By += by
         Bz += bz
 
     return Bx, By, Bz
+
+
+def B_polywell(X, Y, Z, I, dia, offset):
+    """
+    Total B-field from a 6-coil polywell (NumPy evaluation) — a convenience
+    wrapper over `B_from_loops`.
+
+    Parameters
+    ----------
+    X, Y, Z : observation coordinates (scalars or arrays)
+    I       : coil current (A)
+    dia     : coil diameter (m)
+    offset  : coil center distance from origin (m)
+    """
+    from warpx_polywell.coils import Polywell
+    return B_from_loops(X, Y, Z, Polywell(I, dia, offset).expand())
 
 
 # ================================================================

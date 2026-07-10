@@ -120,10 +120,11 @@ grid = picmi.Cartesian3DGrid(
     warpx_max_grid_size=32,
 )
 
-import warpx_polywell.bext.analytic as analytic
+from warpx_polywell.coils import Loop
+from warpx_polywell.bext.analytic import build_aext_from_loops
 
-analytic.POLYWELL_COILS = [('x', 1, 1)]
-A_external = analytic.build_aext_expressions(I=cfg.I, dia=cfg.dia, offset=0.0)
+# Single x-axis coil at the origin (replaces the old POLYWELL_COILS monkeypatch).
+A_external = build_aext_from_loops([Loop("x", 0.0, cfg.dia / 2, cfg.I)])
 print(A_external)
 
 solver = picmi.HybridPICSolver(

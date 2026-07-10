@@ -12,7 +12,15 @@ Run:
 import sys
 
 from warpx_polywell.coils import Loop, Polywell
-from warpx_polywell.bext.analytic import POLYWELL_COILS
+
+# The canonical polywell layout (axis, position sign, current sign). This was
+# formerly analytic.POLYWELL_COILS; it now lives only in Polywell, so the test
+# pins Polywell against this literal spec.
+EXPECTED_LAYOUT = [
+    ("x", -1, -1), ("x", 1, 1),
+    ("y", -1, -1), ("y", 1, 1),
+    ("z", -1, -1), ("z", 1, 1),
+]
 
 
 def main():
@@ -27,12 +35,12 @@ def main():
                 int(round(lp.position)),
                 int(round(lp.current)))
                for lp in loops]
-    match = derived == list(POLYWELL_COILS)
+    match = derived == EXPECTED_LAYOUT
     ok &= match
-    print(f"  Polywell.expand() == POLYWELL_COILS : [{'PASS' if match else 'FAIL'}]")
+    print(f"  Polywell.expand() == canonical layout: [{'PASS' if match else 'FAIL'}]")
     if not match:
         print(f"    derived:  {derived}")
-        print(f"    expected: {list(POLYWELL_COILS)}")
+        print(f"    expected: {EXPECTED_LAYOUT}")
 
     # radius = diameter/2 for every loop
     radii_ok = all(abs(lp.radius - 1.0) < 1e-15 for lp in loops)
