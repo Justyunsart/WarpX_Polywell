@@ -96,6 +96,17 @@ def _loop_A_cartesian(X, Y, Z, axis, pos, a, I):
     return aphi * Z / r, np.zeros_like(X), -aphi * X / r
 
 
+def A_from_loops(X, Y, Z, loops):
+    """Total vector potential of an arbitrary list[Loop] (NumPy reference)."""
+    Ax = np.zeros_like(X, dtype=float)
+    Ay = np.zeros_like(X, dtype=float)
+    Az = np.zeros_like(X, dtype=float)
+    for lp in loops:
+        ax, ay, az = _loop_A_cartesian(X, Y, Z, lp.axis, lp.position, lp.radius, lp.current)
+        Ax += ax; Ay += ay; Az += az
+    return Ax, Ay, Az
+
+
 def A_polywell(X, Y, Z, I, dia, offset):
     """Total vector potential of the 6-coil polywell (NumPy reference)."""
     a = dia / 2

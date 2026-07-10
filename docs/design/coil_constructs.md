@@ -1,6 +1,7 @@
 # Design note — coil construct architecture (`Loop` primitive + composites)
 
-**Status:** approved for implementation (full unification) — code not yet started
+**Status:** IMPLEMENTED on branch `feature/coil-primitives` (Phases 0–4 complete,
+verification suite green). Pending review + PR into `dev`.
 **Author:** drafted with Claude Code, 2026-07-09
 **Motivation:** a growing need for parameterized coil constructs (starting with a
 **washer**) that must feed *both* the magpylib pipeline and the analytic
@@ -177,7 +178,17 @@ a judgment call.
 | **1. Primitive** | Add `Loop` + `Polywell(...).expand()`; change nothing else. | `Polywell(...).expand()` reproduces `POLYWELL_COILS` (derive + assert equal). |
 | **2. Adapters** | Write `to_collection`; rewrite analytic builders to take `list[Loop]`. | String equality vs golden strings; `np.allclose` vs golden magpylib array. |
 | **3. Rewire** | Point `setup_bext` + notebooks at new builders; delete old `make_collection` funcs and `POLYWELL_COILS`. | Full suite green; **cache filenames unchanged**; differential oracle green. |
-| **4. Feature** | Add `Washer` + washer-polywell composite. | `Washer(...).expand()` → analytic adapter reproduces `build_n_turn_aext_expression` exactly; differential oracle green on a washer config. |
+| **4. Feature** | Add `Washer` composite. | Structure (linspace radii, shared params, validation); differential oracle green on a washer config; `build_aext_from_loops(washer.expand())` emits one valid A_external entry per sub-loop. |
+
+> Phase 4 gate note: the original plan said "reproduce `build_n_turn_aext_expression`
+> exactly." In practice that legacy builder is *turn-major* (n concentric
+> polywells, keys `coil_i_turn`) while a `Washer` is *face-major* (one annulus) —
+> the same loops in a different grouping, so their emitted **names** differ even
+> though the physics is identical. The legacy builder already routes through
+> `Polywell` (via the Phase 2 wrapper) and keeps its golden byte-for-byte, so it
+> was left untouched; the Washer is instead verified by the stronger physical
+> check (three independent field representations agree), which is the right gate
+> for a genuinely new construct.
 
 The washer is **last**: reach single-source-of-truth on the known-good polywell
 (where golden values exist) before building the new construct on the now-trusted
