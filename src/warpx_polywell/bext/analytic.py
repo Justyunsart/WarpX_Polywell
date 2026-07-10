@@ -234,47 +234,36 @@ def _coil_cartesian_term(tag, axis, component, I_val):
     return f"{I_val:.15e}*({base_expr})"
 
 
-def build_bext_expressions(I, dia, offset):
+def build_bext_from_loops(loops):
     """
     Build WarpX parser expression strings for Bx(x,y,z), By(x,y,z), Bz(x,y,z)
-    for a 6-coil polywell configuration.
+    from a `list[Loop]` (the canonical coil representation).
 
     Uses AMReX's native comp_ellint_1(k)/comp_ellint_2(k) and local-variable
     syntax for compact, exact expressions (~3-4 KB each instead of ~28 KB).
 
-    Parameters
-    ----------
-    I      : coil current (A)
-    dia    : coil diameter (m)
-    offset : coil center distance from origin (m)
-
     Returns
     -------
-    dict with keys:
-        'Bx', 'By', 'Bz' : parser expression strings (functions of x, y, z)
+    dict with keys 'Bx', 'By', 'Bz' : parser expression strings (of x, y, z).
     """
-    a = dia / 2
-
-    # Collect all variable definitions and per-component sum terms
     all_var_defs = []      # list of "varname=expr" strings
     Bx_terms = []
     By_terms = []
     Bz_terms = []
 
-    for idx, (axis, pos_sign, I_sign) in enumerate(POLYWELL_COILS):
-        tag = str(idx + 1)   # "1" through "6"
-        pos = pos_sign * offset
-        coil_I = I_sign * I  # signed current for this coil
+    for idx, loop in enumerate(loops):
+        tag = str(idx + 1)   # "1", "2", ...
+        a = loop.radius
 
         # Variable definitions for this coil (axis-dependent geometry,
         # but current-independent — current is factored in at the end)
-        var_defs = _coil_var_defs(tag, axis, pos, a)
+        var_defs = _coil_var_defs(tag, loop.axis, loop.position, a)
         all_var_defs.extend(var_defs)
 
         # Cartesian projection terms (with current prefactor)
-        Bx_terms.append(_coil_cartesian_term(tag, axis, 'Bx', coil_I))
-        By_terms.append(_coil_cartesian_term(tag, axis, 'By', coil_I))
-        Bz_terms.append(_coil_cartesian_term(tag, axis, 'Bz', coil_I))
+        Bx_terms.append(_coil_cartesian_term(tag, loop.axis, 'Bx', loop.current))
+        By_terms.append(_coil_cartesian_term(tag, loop.axis, 'By', loop.current))
+        Bz_terms.append(_coil_cartesian_term(tag, loop.axis, 'Bz', loop.current))
 
     # Assemble: "var1=...; var2=...; ...; sum_term1 + sum_term2 + ..."
     preamble = "; ".join(all_var_defs)
@@ -284,6 +273,20 @@ def build_bext_expressions(I, dia, offset):
         'By': preamble + "; " + "+".join(By_terms),
         'Bz': preamble + "; " + "+".join(Bz_terms),
     }
+
+
+def build_bext_expressions(I, dia, offset):
+    """
+    Polywell convenience wrapper over `build_bext_from_loops` — see there.
+
+    Parameters
+    ----------
+    I      : coil current (A)
+    dia    : coil diameter (m)
+    offset : coil center distance from origin (m)
+    """
+    from warpx_polywell.coils import Polywell
+    return build_bext_from_loops(Polywell(I, dia, offset).expand())
 
 def _coil_aext_term(tag, axis, component):
     """
@@ -303,21 +306,23 @@ def _coil_aext_term(tag, axis, component):
     }
     return mapping[axis][component]
 
-def build_aext_expressions(I, dia, offset, eps=1e-30):
+def build_aext_from_loops(loops, eps=1e-30):
     """
-    Returns a dict of 6 coil entries for WarpX's A_external nested dict.
-    Each coil has its own self-contained Ax, Ay, Az parser expressions
-    with only 9 geometric variables in the preamble.
+    Returns a dict of coil entries for WarpX's A_external nested dict, built from
+    a `list[Loop]`. Each coil has its own self-contained Ax, Ay, Az parser
+    expressions with only the geometric variables it needs in the preamble.
 
-    Returns an A_external value that is accepted by HybridPICSolver
+    Coils are named coil_1 .. coil_N in list order. The result is accepted by
+    HybridPICSolver.
     """
-    a = dia / 2
     coils = {}
 
-    for idx, (axis, pos_sign, I_sign) in enumerate(POLYWELL_COILS):
+    for idx, loop in enumerate(loops):
         tag = str(idx + 1)
-        pos = pos_sign * offset
-        coil_I = I_sign * I
+        axis = loop.axis
+        pos = loop.position
+        a = loop.radius
+        coil_I = loop.current
 
         B_only_prefixes = ('ct_', 'st_', 'Bax_', 'Br_')
         var_defs = [v for v in _coil_var_defs(tag, axis, pos, a, eps)
@@ -347,6 +352,22 @@ def build_aext_expressions(I, dia, offset, eps=1e-30):
         }
 
     return coils
+
+
+def build_aext_expressions(I, dia, offset, eps=1e-30):
+    """
+    Polywell convenience wrapper over `build_aext_from_loops`.
+
+    Parameters
+    ----------
+    I      : coil current (A)
+    dia    : coil diameter (m)
+    offset : coil center distance from origin (m)
+    eps    : geometric softening for the r->0 axis (m)
+    """
+    from warpx_polywell.coils import Polywell
+    return build_aext_from_loops(Polywell(I, dia, offset).expand(), eps=eps)
+
 
 def build_n_turn_aext_expression(I, offset, a, b, n):
     """
