@@ -197,7 +197,7 @@ def _coil_var_defs(tag, axis, pos, a, eps=1e-30):
 
     return [
         f"r2_{tag}={r2_rhs}",
-        f"r_{tag}=sqrt(r2_{tag}+{eps**2})",
+        f"r_{tag}=sqrt(r2_{tag}+{eps**2 if eps != 1e-30 else eps})",
         f"z_{tag}={z_rhs}",
         f"ct_{tag}={ct_rhs}",
         f"st_{tag}={st_rhs}",
@@ -327,6 +327,13 @@ def build_aext_expressions(I, dia, offset, eps=1e-30):
         # dimensionless; an earlier version used 1/beta (=1/sb) here, which has
         # units of 1/length and made B=curl(A) wrong by a position-dependent
         # factor (~2x, and ~3x too weak on-axis).
+        
+        # OLD
+        # var_defs.append(
+        #     f"Aphi_{tag}={MU0:.15e}/{np.pi:.15e}"
+        #     f"*((1.0-0.5*k_{tag}**2)*K_{tag}-E_{tag})"
+        #     f"/(sqrt(k_{tag}**2+1e-30)*sb_{tag})"
+        # )
         var_defs.append(
             f"Aphi_{tag}={MU0:.15e}/{np.pi:.15e}"
             f"*sqrt({a:.15e}/(r_{tag}+1e-30))"
