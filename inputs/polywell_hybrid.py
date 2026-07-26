@@ -108,6 +108,7 @@ if not isinstance(cfg, str):
         print("*********************************")
 
     cfg.compute_b()
+    print(cfg.B_coil)
 
 class PollywellSixCoilHybrid: 
     def __init__(self, cfg: PolywellHybridConfig | str):
@@ -120,10 +121,9 @@ class PollywellSixCoilHybrid:
             warpx_grid_type = "collocated",
             warpx_use_filter = True
             )
-        warpx.filter_npass_each_dir = [2, 2, 2]
+        warpx.filter_npass_each_dir = [3, 3, 3]
         self.get_plasma_quantities()
         self.get_sim_length()
-        exit()
         self.set_grid()
         self.set_b_field()
         self.set_solver() 
@@ -191,7 +191,7 @@ class PollywellSixCoilHybrid:
             print(f"[WARNING] Plasma bounding spawns particles outside of reactor, re-scaling")
             # this ensures we spawn within the system, with a scaling factor to spawn closer to center
             # if no scaling, spawn at b_offset
-            new_plasma_bounding = 0.5 * (cfg.b_offset / cfg.L)
+            new_plasma_bounding = 0.2 * (cfg.b_offset / cfg.L)
             cfg.plasma_bounding = new_plasma_bounding
             print(f"[new plasma bounding value] {cfg.plasma_bounding}, spawning particles in central radius: {new_plasma_bounding * cfg.L}")
         self.plasma_bounding = cfg.plasma_bounding
@@ -243,6 +243,9 @@ class PollywellSixCoilHybrid:
 
         print("\n[get_plasma_quantities] **********************************")
         print(f"Working with a B-Coil Center: {self.B_coil}")
+        print(f"Standoff pressure at coil center: "
+              f"beta: {self.p_density * (self.Ti_J + self.Te_J) * 2 * MU0 / self.B_coil**2}")
+
 
         # Thermal speed, need dt < dx / v_ion
         # v_most_probably = v_rms / sqrt(2)
@@ -306,8 +309,8 @@ class PollywellSixCoilHybrid:
         # substeps >= dt_cyclo / dt_Alfven / 2
         substeps_min = int(np.ceil(self.dt / (2 * self.dt_Alfven)))
         substeps_min = int(np.ceil(max(self.dt / self.dt_Alfven, self.dt / self.dt_whistler)))
-        self.substeps = max(substeps_min, 20)
-        print(f"[substeps] derived substeps = {self.substeps} = max(derived, 20)"
+        self.substeps = max(substeps_min, 32)
+        print(f"[substeps] derived substeps = {self.substeps} = max(derived, 32)"
                 f"(dt_Bfield = {self.dt/(self.substeps):.3e} s, "
                 f"dt_Alfven = {self.dt_Alfven:.3e} s, "
                 f"dt_whistler = {self.dt_whistler:.3e} s)")
@@ -380,25 +383,6 @@ class PollywellSixCoilHybrid:
             A_external = build_n_turn_aext_expression(self.I, self.b_offset, self.r1, self.r1, self.n_turns)
         self.A_external = A_external
 
-    def set_embedded_coils(self):
-        print('[stl] Adding coils from stl file')
-        coil_structure = {
-            'r1': self.r1,
-            'r2': self.r2,
-            'n_turns': self.n_turns
-        }
-        path = make_coil_stl(coil_structure, self.b_offset, self.L, self.N, full=self.domain.symmetry == "full")
-        coil_ebs = picmi.EmbeddedBoundary(
-            stl_file=path,
-            # stl_scale=1.0,
-            # stl_center=[0, 0, 0],
-            # stl_reverse_normal=False,
-        )
-        #self.sim.warpx_embedded_boundary = coil_ebs
-        print('[stl] Coils added as embedded boundaries from STL file')
-        print('[stl] Boundary conditions default to PEC for fields and absorbing for particles')
-        return coil_ebs
-
     def set_solver(self):
 
         """
@@ -459,12 +443,6 @@ class PollywellSixCoilHybrid:
             n_floor=n_floor,             # density floor for numerical stability,
             # NEED SUBSTEPS
             substeps=self.substeps,
-            # use_rkf45 = True,
-            # substep_rtol = 1e-6,
-            # substep_atol = 1e-10,
-            # substep_safety = 0.5,
-            # substep_max_growth = 2.0,
-            # max_substep_attempts = 2000, 
             A_external = self.A_external,
             holmstrom_vacuum_region=True,
             do_external_diva_cleaning=False,
@@ -648,7 +626,7 @@ class PollywellSixCoilHybrid:
                     "Ex", "Ey", "Ez",
                     "Bx_fp_external", "By_fp_external", "Bz_fp_external",
                     "Ex_fp_external", "Ey_fp_external", "Ez_fp_external",
-                    "Jx", "Jy", "Jz", "part_per_cell", "rho",
+                    "Jx", "Jy", "Jz", "part_per_cell", "rho", "T_plasma_i",
                     "eb_covered"],
             warpx_format='openpmd',
             warpx_openpmd_backend='h5',
@@ -672,7 +650,7 @@ class PollywellSixCoilHybrid:
         # Boundary scraping diagnostics
         scraping_diag = picmi.ParticleBoundaryScrapingDiagnostic(
             name="boundary_scraping",
-            period=10,
+            period=self.diag_period,
             species=[self.plasma_i],
             data_list=["x", "y", "z", "ux", "uy", "uz", "weighting"],
             warpx_format='openpmd',
@@ -708,10 +686,9 @@ class PollywellSixCoilHybrid:
         self.sim.add_diagnostic(field_energy_reduced_diag)
         self.sim.add_diagnostic(particle_energy_reduced_diag)
 
-    def cusp_loss_count(self, pc):
+    def cusp_loss_count(self, pc, injection_radius):
 
         injection_sphere_count = 0.0
-        injection_radius = self.plasma_bounding * self.L
 
         for pti in pc.iterator(level=0):
             x  = np.array(pti['x'], copy=False)
@@ -724,101 +701,137 @@ class PollywellSixCoilHybrid:
             cur_injection_sphere_count = np.sum(in_sphere)
             injection_sphere_count += cur_injection_sphere_count
 
-        print("MADE IT TO INJECTION SPHERE COUNT: ", injection_sphere_count)
+        # --- cusp directions ---
+        face_nhats = [np.array(d, dtype=float) for d in [
+            [1,0,0], [-1,0,0],
+            [0,1,0], [0,-1,0],
+            [0,0,1], [0,0,-1],
+        ]]
+        s = 1.0 / np.sqrt(3)
+        corner_nhats = [np.array([a,b,c]) * s for a in [1,-1] for b in [1,-1] for c in [1,-1]]
 
-        total = 0.0
-        per_face = []
-        
-        faces = [
-            (0, +1), (0, -1),
-            (1, +1), (1, -1),
-            (2, +1), (2, -1),
-        ]
-        
-        for ax, sign in faces:
-            # get the coordinates for this slab slice
-            ax1, ax2 = (ax+1)%3, (ax+2)%3
-            # slab of width about sign * b_offset
-            face_center = sign * self.b_offset
+        cusps = [('face', n) for n in face_nhats] + [('corner', n) for n in corner_nhats]
+
+        # using quasi-spherical nature for cusp distance from origen 
+        r_saddle    = self.b_offset
+        throat_r    = self.b_dia / 2
+        total       = 0.0
+        per_cusp    = []
+
+        for kind, n_hat in cusps:
             loss = 0.0
-            
+
+            # NOTE: corner cusp ***approximated*** as circle tangent to three face cusps
+            # The tangent is located, when viewing a ring, at (sin(45), sin(45)) (because cos(45) = sin(45))
+            # May not be a good proxy for corner cusp loss
+            # TODO: Use saddle point of B as a way to determine corner cusp radius 
+            # NOTE: This can be the point where |B| drops to some fraction
+            # (b_radius) * sin(pi / 4)
+            if kind == "corner":
+                # 45 degree from coil center to circle edge
+                a = self.b_dia/2 * np.sin(np.pi / 4)
+                # one coil tangent
+                v1 = np.array((self.b_offset, a, a))
+                # another coil tangent
+                v2 = np.array((a, self.b_offset, a))
+                # length of equilateral triangle built from these tangents
+                triangle_len = np.linalg.norm(v1 - v2)
+                # circle that inscribes this triangle
+                # tan(30) = throat_r / (t_len / 2)
+                # throat_r = (t_len/2) * tan(30)
+                throat_r = (triangle_len / 2) * np.tan(30 * np.pi / 180)
+            else:
+                throat_r = self.b_dia / 2
+
             for pti in pc.iterator(level=0):
-                x  = np.array(pti['x'], copy=False)
-                y  = np.array(pti['y'], copy=False)
-                z  = np.array(pti['z'], copy=False)
+                x  = np.array(pti['x'],  copy=False)
+                y  = np.array(pti['y'],  copy=False)
+                z  = np.array(pti['z'],  copy=False)
                 ux = np.array(pti['ux'], copy=False)
                 uy = np.array(pti['uy'], copy=False)
                 uz = np.array(pti['uz'], copy=False)
-                
-                coords = [x, y, z]
-                vels   = [ux, uy, uz]   
-                
-                # width of slab on axis, dx / 2 since it's width is dx
-                in_slab  = np.abs(coords[ax] - face_center) < self.dx / 2
-                # slice on perpendicular axes
-                # basically 
-                in_face  = (np.abs(coords[ax1]) < self.b_dia / 2) & \
-                        (np.abs(coords[ax2]) < self.b_dia / 2)
-                in_face = (coords[ax1]**2 + coords[ax2]**2 < (self.b_dia / 2)**2 )
-                # is it leaving?
-                outgoing = sign * vels[ax] > 0
-                # ensure we only capture particles that will be leaving the slab (no counting twice)
-                # if they're normal velocity and position imply they will leave after this time step
-                # calculate x value after time step using current normal velocity
-                next_pos = coords[ax] + vels[ax] * self.dt
-                # scale by sign so a single comparison operator works
-                # |next_pos| > |slab_end|
-                will_exit = sign * next_pos > sign * (face_center + sign * self.dx / 2)
-                mask = in_slab & in_face & outgoing & will_exit
-                loss += np.sum(mask)
-            
-            per_face.append(loss)
+
+                r_vec  = np.stack([x, y, z],    axis=1)   # (N, 3)
+                v_vec  = np.stack([ux, uy, uz], axis=1)
+
+                # project onto normal 
+                r_proj = r_vec @ n_hat # axial distance, along cusp normal
+                # removing axial component, isolating radial component, solely perpendicular to normal through cusp
+                r_perp = np.linalg.norm(r_vec - np.outer(r_proj, n_hat), axis=1)  # transverse
+                # velocity projected onto normal
+                v_proj = v_vec @ n_hat # axial velocity
+
+                # are we within acceptable axial distance? (slab length)
+                in_slab   = np.abs(r_proj - r_saddle) < self.dx / 2
+                # are we within the radial distance? (circular area)
+                in_throat = r_perp < throat_r
+                # are we moving through the cusp to outside of system
+                outgoing  = v_proj > 0
+                # will we have left the system
+                will_exit = (r_proj + v_proj * self.dt) > (r_saddle + self.dx / 2)
+
+                loss += np.sum(in_slab & in_throat & outgoing & will_exit)
+
+            per_cusp.append((kind, loss))
             total += loss
 
-        print("MADE IT TO CUSP LOSS: ", total)
-        
-        return int(round(total)), per_face, injection_sphere_count
+        return per_cusp, injection_sphere_count
 
     def add_injection_callback(self):
-        # TODO: Make injection outweigh loss, that initial burst effect should remain as a continuous effect, have N_inject increase up to max loss and remain as such. 
-        # TODO: Make injection an increasing trend
         inject_radius = self.plasma_bounding * self.L
         v_rms = np.sqrt(self.Ti_J / self.M)
         particle_container = self.sim.particles.get("plasma_i")
         _loss_log = {
-            "times": [], 
-            "per_face": [], 
-            "from_injection_volume": [],
-            "peak_cusp_loss": 0
-            }  # closure state
+            "times":                  [],
+            "per_face":               [],   # (N_steps, 6)
+            "per_corner":             [],   # (N_steps, 8)
+            "from_injection_volume":  [],
+            "peak_cusp_loss":         0,
+            "min_spawn_count":        0,
+            "injected":               [],
+        }
         df = particle_container.to_df(local=True)
         weight = df['w'].iloc[0]
         N_t0 = len(df['w'])
         print(f"INITIAL PARTICLE COUNT: {N_t0:3e}")
+        spawn_ratio = (inject_radius / (self.plasma_bounding * self.L))**3
+        print(spawn_ratio)
+        min_spawn_count = int(N_t0 * (spawn_ratio))
+        # print(f"MINIMUM SPAWN COUNT: {min_spawn_count}")
+        # _loss_log['min_spawn_count'] = min_spawn_count
         def inject_particles():
-            total_loss, per_face, injection_sphere_count = self.cusp_loss_count(particle_container)
-            # Have to divide by 6 since we count these six times, it's a waste but random bug occurred when doing it "properly"
-            injection_sphere_count = injection_sphere_count // 6
-            print("INJECTION SPHERE COUNT: ", injection_sphere_count)
+            per_cusp, injection_sphere_count = self.cusp_loss_count(particle_container, injection_radius=inject_radius)
+            print("CALCULATING HOW MUCH LOST FROM INITIAL SPHERE OF INJECTION")
+            print(f"LOST: {min_spawn_count - injection_sphere_count}")
+            face_losses   = [loss for kind, loss in per_cusp if kind == 'face']
+            corner_losses = [loss for kind, loss in per_cusp if kind == 'corner']
+            total_cusp_loss    = sum(face_losses) + sum(corner_losses)
+
+            _loss_log['per_face'].append(face_losses)
+            _loss_log['per_corner'].append(corner_losses)
+
+            N_inject = int(max(_loss_log['peak_cusp_loss'], total_cusp_loss))
+            _loss_log['injected'].append(N_inject)
+
             injection_sphere_loss = max(N_t0 - injection_sphere_count, 0)
             _loss_log['from_injection_volume'].append(injection_sphere_loss)
-            # Retain that density lost to the burst, 
-            N_inject = int(max(_loss_log['peak_cusp_loss'], total_loss, injection_sphere_loss))
-            # Keep track of losses through cusps
-            _loss_log['peak_cusp_loss'] = max(_loss_log['peak_cusp_loss'], total_loss)
 
-            print(f"[injection callback] Total face-cusp loss: {total_loss}\n"
-                  f"[injection callback] Loss from initial spawn sphere: {injection_sphere_loss}\n"
-                  f"[injection callback] Injection count: {N_inject}\n"
+            # Keep track of losses through cusps
+            _loss_log['peak_cusp_loss'] = max(_loss_log['peak_cusp_loss'], total_cusp_loss)
+
+            print(f"[injection callback] Cusp loss this step: {total_cusp_loss}\n"
+                  f"[injection callback] Max cusp loss: {_loss_log['peak_cusp_loss']}\n"
+                  f"[injection callback] Corner cusp loss this step: {sum(corner_losses)}"
+                  f"[injection callback] Face cusp loss this step: {sum(face_losses)}"
+                  f"[injection callback] Loss from initial spawn sphere this step: {injection_sphere_loss:.2e}\n"
+                  f"[injection callback] Injection count this step: {N_inject}\n"
                   )
 
             _loss_log['times'].append(self.sim.extension.warpx.gett_new(0))
-            _loss_log['per_face'].append(per_face)
             # simply return if nothing to add back in
             if N_inject == 0:
                 return
             w = np.ones(N_inject) * weight
-            print("CREATED WEIGHT ARRAY")
             # uniform sphere sampling
             r = inject_radius * np.cbrt(np.random.uniform(0, 1, N_inject))
             theta = np.arccos(np.random.uniform(-1, 1, N_inject))
@@ -833,6 +846,8 @@ class PollywellSixCoilHybrid:
             uy = np.random.normal(0, v_rms, N_inject)
             uz = np.random.normal(0, v_rms, N_inject)
 
+            
+
             particle_container.add_particles(
                 x=x, y=y, z=z,
                 ux=ux, uy=uy, uz=uz,
@@ -840,13 +855,16 @@ class PollywellSixCoilHybrid:
                 unique_particles=False,
             )
 
-        def save_cusp_losses():
+        def save_cusp_losses():  
             np.savez("diags/cusp_flux.npz",
-                    times=np.array(_loss_log["times"]),
-                    losses=np.array(_loss_log["per_face"]),
-                    injected=_loss_log['peak_cusp_loss'],
-                    from_injection_volume=_loss_log['from_injection_volume'],
-                    face_labels=["x_hi","x_lo","y_hi","y_lo","z_hi","z_lo"])
+                times          = np.array(_loss_log["times"]),
+                per_face       = np.array(_loss_log["per_face"]),
+                per_corner     = np.array(_loss_log["per_corner"]),
+                injected       = np.array(_loss_log["injected"]),
+                from_injection_volume = _loss_log['from_injection_volume'],
+                face_labels    = ["x_hi","x_lo","y_hi","y_lo","z_hi","z_lo"],
+                corner_labels  = ["ppp","ppn","pnp","pnn","npp","npn","nnp","nnn"],
+            )
 
         callbacks.installcallback('afterstep',inject_particles)
         callbacks.installcallback('afterdiagnostics', save_cusp_losses)
