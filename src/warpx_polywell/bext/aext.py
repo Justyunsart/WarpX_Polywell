@@ -15,7 +15,7 @@ POLYWELL_COILS = [
     ('z', +1, +1),   # s6: +z axis, current +I
 ]
 
-EPS_SAFE = 1e-12
+EPS_SAFE = 1e-30
 
 def _Aphi_vec(rho, zeta, R, I):
     """
@@ -27,8 +27,14 @@ def _Aphi_vec(rho, zeta, R, I):
     k2 = np.clip(4 * R * rho_safe / ((R + rho_safe)**2 + zeta**2), 0, 1 - EPS_SAFE)
     K = ellipk(k2)
     E = ellipe(k2)
+    # analytic.py
+    # (I * MU0 / pi)*sqrt(R / (r + 1e-30))*((1.0 - 0.5 * k2) * K - E) / sqrt(k2**2 + 1e-30)
+    # (I * MU0 *)
     pref = MU0 * I / (np.pi * np.sqrt(k2 + 1e-30))
     Aphi = pref * np.sqrt(R / rho_safe) * ((1 - 0.5 * k2) * K - E)
+    # MU0 * I * sqrt(R / r) * ((1.0 - 0.5 * k2) * K - E) / (pi * sqrt(k2**2 + 1e-30))
+
+    # MU0 * I * sqrt(R / r) * ((1.0 - 0.5 * k2) * K - E) / (pi * sqrt(k2 + 1e-30))
     # zero exactly on axis (rho=0 has no phi direction)
     return np.where(rho < EPS_SAFE, 0.0, Aphi)
 
@@ -187,8 +193,8 @@ def compute_A_polywell(X, Y, Z, I, offset, a, b, n):
     Returns Ax, Ay, Az — same shape as inputs.
     """
     Ax = np.zeros_like(X, dtype=float)
-    Ay = np.zeros_like(X, dtype=float)
-    Az = np.zeros_like(X, dtype=float)
+    Ay = np.zeros_like(Y, dtype=float)
+    Az = np.zeros_like(Z, dtype=float)
     for axis, pos_sign, I_sign in POLYWELL_COILS:
         ax, ay, az = _A_single_n_turn_coil(X, Y, Z, axis, pos_sign * offset, I_sign * I, a, b, n)
         Ax += ax
@@ -217,3 +223,28 @@ def curlA(Ax, Ay, Az, dx, dy, dz):
     }
 
     return B_curlA
+
+def get_B_disk(X, Y, Z, I, r1, r2, n_turns, ring_r, dx, dy, dz):
+    N = X.shape[0]
+    Axd, Ayd, Azd = _A_single_n_turn_coil(X, Y, Z, 'x', 0.0, I, r1, r2, n_turns)
+    Bd = curlA(Axd, Ayd, Azd, dx, dy, dz)
+    Bxd, Byd, Bzd = Bd['x'], Bd['y'], Bd['z']
+
+    ring_Bx, _, _ = get_B_ring(X, Y, Z, I, ring_r)
+
+    Bxd_center = Bxd[N//2, N//2, N//2]
+    Bxr_center = ring_Bx[N//2, N//2, N//2]
+
+    scale = Bxr_center / Bxd_center
+
+    Axd, Ayd, Azd = _A_single_n_turn_coil(X, Y, Z, 'x', 0.0, I * scale, r1, r2, n_turns)
+    Bd = curlA(Axd, Ayd, Azd, dx, dy, dz)
+    disk_Bx, disk_By, disk_Bz = Bd['x'], Bd['y'], Bd['z']
+
+    return disk_Bx, disk_By, disk_Bz
+
+def get_B_ring(X, Y, Z, I, r, dx, dy, dz):
+    Axr, Ayr, Azr = _A_single_n_turn_coil(X, Y, Z, 'x', 0.0, I, r, r, 1)
+    Br = curlA(Axr, Ayr, Azr, dx, dy, dz)
+    ring_Bx, ring_By, ring_Bz = Br['x'], Br['y'], Br['z']
+    return ring_Bx, ring_By, ring_Bz
