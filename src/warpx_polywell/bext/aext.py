@@ -225,6 +225,21 @@ def curlA(Ax, Ay, Az, dx, dy, dz):
     return B_curlA
 
 def get_B_disk(X, Y, Z, I, r1, r2, n_turns, ring_r, dx, dy, dz):
+    """
+    Produces the relevant B field for a disk. 
+
+    parameters:
+        - X, Y, Z: from np.meshgrid
+        - I: current before scaling for each turn
+        - r1/r2: inner and outer radii, respectively
+        - n_turns: number of turns between r1 and r2
+        - ring_r: Size of reference ring coil to use for scaling down
+        - dx/dy/dz: cell sizes in each dim
+
+    returns:
+        - disk_Bx, disk_By, disk_Bz: B field of disk for each component
+        - scale: the scale used to decrease current within each turns
+    """
     N = X.shape[0]
     Axd, Ayd, Azd = _A_single_n_turn_coil(X, Y, Z, 'x', 0.0, I, r1, r2, n_turns)
     Bd = curlA(Axd, Ayd, Azd, dx, dy, dz)
@@ -241,7 +256,7 @@ def get_B_disk(X, Y, Z, I, r1, r2, n_turns, ring_r, dx, dy, dz):
     Bd = curlA(Axd, Ayd, Azd, dx, dy, dz)
     disk_Bx, disk_By, disk_Bz = Bd['x'], Bd['y'], Bd['z']
 
-    return disk_Bx, disk_By, disk_Bz
+    return disk_Bx, disk_By, disk_Bz, scale
 
 def get_B_ring(X, Y, Z, I, r, dx, dy, dz):
     Axr, Ayr, Azr = _A_single_n_turn_coil(X, Y, Z, 'x', 0.0, I, r, r, 1)
