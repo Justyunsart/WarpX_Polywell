@@ -2,7 +2,6 @@
 
 import numpy as np
 from scipy.special import ellipk, ellipe
-from src.warpx_polywell.domain import Domain
 
 MU0 = 4e-7 * np.pi
 
@@ -224,7 +223,7 @@ def curlA(Ax, Ay, Az, dx, dy, dz):
 
     return B_curlA
 
-def get_B_disk(X, Y, Z, I, r1, r2, n_turns, ring_r, dx, dy, dz):
+def get_B_disk(X, Y, Z, I, r1, r2, n_turns, ring_r, dx, dy, dz, scale_down=False):
     """
     Produces the relevant B field for a disk. 
 
@@ -245,16 +244,23 @@ def get_B_disk(X, Y, Z, I, r1, r2, n_turns, ring_r, dx, dy, dz):
     Bd = curlA(Axd, Ayd, Azd, dx, dy, dz)
     Bxd, Byd, Bzd = Bd['x'], Bd['y'], Bd['z']
 
-    ring_Bx, _, _ = get_B_ring(X, Y, Z, I, ring_r)
+    if scale_down:
+        ring_Bx, _, _ = get_B_ring(X, Y, Z, I, ring_r, dx, dy, dz)
 
-    Bxd_center = Bxd[N//2, N//2, N//2]
-    Bxr_center = ring_Bx[N//2, N//2, N//2]
+        Bxd_center = Bxd[N//2, N//2, N//2]
+        Bxr_center = ring_Bx[N//2, N//2, N//2]
 
-    scale = Bxr_center / Bxd_center
+        scale = Bxr_center / Bxd_center
 
-    Axd, Ayd, Azd = _A_single_n_turn_coil(X, Y, Z, 'x', 0.0, I * scale, r1, r2, n_turns)
-    Bd = curlA(Axd, Ayd, Azd, dx, dy, dz)
-    disk_Bx, disk_By, disk_Bz = Bd['x'], Bd['y'], Bd['z']
+        Axd, Ayd, Azd = _A_single_n_turn_coil(X, Y, Z, 'x', 0.0, I * scale, r1, r2, n_turns)
+        Bd = curlA(Axd, Ayd, Azd, dx, dy, dz)
+        disk_Bx, disk_By, disk_Bz = Bd['x'], Bd['y'], Bd['z']
+
+    else:
+        scale = 1
+        disk_Bx = Bxd 
+        disk_By = Byd 
+        disk_Bz = Bzd
 
     return disk_Bx, disk_By, disk_Bz, scale
 
