@@ -1,9 +1,3 @@
-"""
-Stability issues, trying a smaller timestep to determine if it remains the point of plasma-coil contact
-
-
-"""
-
 import numpy as np
 import scipy.constants as sc
 from pywarpx import picmi, warpx
@@ -49,7 +43,7 @@ class SingleCoil3DConfig:
     substeps:   int   = 100         # B-field substeps
 
     # disk vs ring configuration
-    disk:       bool  = True       # whether to use a ring or a disk 
+    disk:       bool  = False       # whether to use a ring or a disk 
     r1:         float = 0.1         # inner radius of disk
     r2:         float = 0.6         # outer radius of disk
     n_turns:    int   = 10          # number of turns between this r1 and r2
@@ -86,7 +80,10 @@ class SingleCoil3DConfig:
             slice_x = np.s_[:, self.N//2, self.N//2]
             print(f"Disk vs Ring @ center:\nRing @ center: {np.max(ring_Bx[slice_x])}\nDisk @ center: {np.max(disk_Bx[slice_x])}")
 
-        self.v_drift_scale = 1e5 / self.v_drift
+        else:
+            print(f"[coil type] Using ring")
+
+        self.v_drift_scale = 1
 
         MU0 = sc.mu_0
 
@@ -272,9 +269,9 @@ if __name__ == "__main__":
         warpx_use_filter=True,
     )
     sim.add_species(stream_i, layout=layout)
-    sim.add_diagnostic(field_diag)
-    sim.add_diagnostic(part_diag)
-    sim.add_diagnostic(scraping_diag)
+    # sim.add_diagnostic(field_diag)
+    # sim.add_diagnostic(part_diag)
+    # sim.add_diagnostic(scraping_diag)
     sim.add_diagnostic(field_energy_reduced_diag)
     sim.add_diagnostic(particle_energy_reduced_diag)
 
@@ -319,7 +316,23 @@ if __name__ == "__main__":
     _flux_n   = [0]
     _flux_pc  = {}   # lazily cached
 
+    _fluxes_region, _counts_conv, _counts_div, _raw_counts = {}, {}, {}, {}
+    for label in ('throat', 'annulus', 'total'):
+        _fluxes_region[label] = [[], []]
+        _counts_conv[label] = []
+        _counts_div[label] = []
+        _raw_counts[label] = []
+
     def count_coil_flux():
+
+        # throat/annulus change depending on ring/disk
+        if cfg.disk:
+            throat_r = cfg.r1 
+            annulus_r = cfg.r2 
+        else:
+            throat_r = cfg.R_coil 
+            annulus_r = cfg.R_coil
+
         if not _flux_pc:
             _flux_pc["pc"] = sim.particles.get("stream_i")
         pc = _flux_pc["pc"]
@@ -327,17 +340,60 @@ if __name__ == "__main__":
         TOTAL_RS = 5
 
         rs = np.linspace(cfg.R_coil / TOTAL_RS, cfg.R_coil, TOTAL_RS)
-
         rminus, rplus = [0]*TOTAL_RS, [0]*TOTAL_RS
+
+        flux_region, cur_counts_conv, cur_counts_div, raw_counts = {}, {}, {}, {}
+
+        for label in ('throat', 'annulus', 'total'):
+            flux_region[label] = [0, 0]
+            cur_counts_conv[label] = 0
+            cur_counts_div[label] = 0
+            raw_counts[label] = 0
+
         for pti in pc.iterator(level=0):
             x  = np.array(pti['x'],  copy=False)
             y  = np.array(pti['y'],  copy=False)
             z  = np.array(pti['z'],  copy=False)
             vx = np.array(pti['ux'], copy=False)
+            vy = np.array(pti['uy'], copy=False)
+            vz = np.array(pti['uz'], copy=False)
             wt = np.array(pti['w'],  copy=False)
 
+            # First capture throat vs disk
+            # within width of capture
+            in_x_slab = np.abs(x) < 0.5 * _slab_L
             # radial distance 
             R    = np.sqrt(y**2 + z**2)
+            # velocity along R (> 0 denotes diverging, < 0 denotes converging)
+            vR = (y * vy + z * vz) / np.maximum(R, 1e-12)
+            in_throat = (in_x_slab) & (R < throat_r)
+            annulus_width = 3 * cfg.dx
+            in_annulus = (in_x_slab) & (R > annulus_r) & (R < (annulus_r + annulus_width))
+
+            # I want to capture directions of all of the particles incident upon the coil
+            # This will be a sort of "deflection/reflection rate"
+            # We get flux as well from this, may or may not be used
+            # ******************************************************************************
+            # NOTE: this will be roughly equivalent to throat for the ring 
+            # NOTE: This capture regions where the disk turns lie, which is relevant for validity testing (curious about this)
+            # NOTE: Can use throat/annulus parts to determine solely disk regions (subtraction)
+            # ******************************************************************************
+            in_circle = in_x_slab & (R < (annulus_r + annulus_width))
+
+            for mask, label in [(in_throat, 'throat'), (in_annulus, 'annulus'), (in_circle, 'total')]:
+                vRm, wm, vxm = vR[mask], wt[mask], vx[mask]
+                # flux calculation for throat/annulus, leaving and returning
+                leaving = vxm < 0
+                flux_region[label][0] += np.sum(wm[leaving] * -vxm[leaving]) / _slab_L
+                flux_region[label][1] += np.sum(wm[~leaving] * vxm[~leaving]) / _slab_L
+
+                # directional counts
+                conv = vRm < 0
+                cur_counts_conv[label] += np.sum(wm[conv])
+                cur_counts_div[label] += np.sum(wm[~conv])
+
+                # raw counts for statistics confidence
+                raw_counts[label] += np.sum(mask)
 
             # The disk will have a smaller inner radius, and hence, particles are more likely to be incident 
             # upon the disk, then pass through it, so we provide a reference x slightly in front to capture 
@@ -362,6 +418,13 @@ if __name__ == "__main__":
         _flux_plus.append(rplus)
         _flux_n[0] += 1
 
+        for label in ('throat', 'annulus', 'total'):
+            _fluxes_region[label][0].append(flux_region[label][0])  # minus (leaving)
+            _fluxes_region[label][1].append(flux_region[label][1])  # plus (returning)
+            _counts_conv[label].append(cur_counts_conv[label])
+            _counts_div[label].append(cur_counts_div[label])
+            _raw_counts[label].append(raw_counts[label])
+
     installafterstep(count_coil_flux)
 
     from pywarpx.callbacks import installafterdiagnostics
@@ -371,7 +434,20 @@ if __name__ == "__main__":
                 times=np.asarray(_flux_t, dtype=float),
                 flux_minus=np.asarray(_flux_minus, dtype=float),
                 flux_plus=np.asarray(_flux_plus, dtype=float),
+                flux_throat=np.asarray(_fluxes_region['throat'], dtype=float),
+                flux_annulus=np.asarray(_fluxes_region['annulus'], dtype=float),
+                flux_total=np.asarray(_fluxes_region['total'], dtype=float),
+                conv_throat=np.asarray(_counts_conv['throat'], dtype=float),
+                conv_annulus=np.asarray(_counts_conv['annulus'], dtype=float),
+                conv_total=np.asarray(_counts_conv['total'], dtype=float),
+                div_throat=np.asarray(_counts_div['throat'], dtype=float),
+                div_annulus=np.asarray(_counts_div['annulus'], dtype=float),
+                div_total=np.asarray(_counts_div['total'], dtype=float),
+                raw_counts_throat=np.asarray(_raw_counts['throat'], dtype=float),
+                raw_counts_annulus=np.asarray(_raw_counts['annulus'], dtype=float),
+                raw_counts_total=np.asarray(_raw_counts['total'], dtype=float),
                 )
+        print(f"[custom diagnostics] saved custom flux and particle count diagnostics")
 
     installafterdiagnostics(save_cusp_losses)
 
