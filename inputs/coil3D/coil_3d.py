@@ -43,7 +43,7 @@ class SingleCoil3DConfig:
     substeps:   int   = 100         # B-field substeps
 
     # disk vs ring configuration
-    disk:       bool  = False       # whether to use a ring or a disk 
+    disk:       bool  = True       # whether to use a ring or a disk 
     r1:         float = 0.1         # inner radius of disk
     r2:         float = 0.6         # outer radius of disk
     n_turns:    int   = 10          # number of turns between this r1 and r2
