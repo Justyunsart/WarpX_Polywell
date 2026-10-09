@@ -223,7 +223,7 @@ def curlA(Ax, Ay, Az, dx, dy, dz):
 
     return B_curlA
 
-def get_B_disk(X, Y, Z, I, r1, r2, n_turns, ring_r, dx, dy, dz, scale_down=False):
+def get_B_disk(X, Y, Z, I, r1, r2, n_turns, ring_r, dx, dy, dz):
     """
     Produces the relevant B field for a disk. 
 
@@ -243,24 +243,45 @@ def get_B_disk(X, Y, Z, I, r1, r2, n_turns, ring_r, dx, dy, dz, scale_down=False
     Axd, Ayd, Azd = _A_single_n_turn_coil(X, Y, Z, 'x', 0.0, I, r1, r2, n_turns)
     Bd = curlA(Axd, Ayd, Azd, dx, dy, dz)
     Bxd, Byd, Bzd = Bd['x'], Bd['y'], Bd['z']
+    scale = 1
+    disk_Bx = Bxd
+    disk_By = Byd
+    disk_Bz = Bzd
 
-    if scale_down:
-        ring_Bx, _, _ = get_B_ring(X, Y, Z, I, ring_r, dx, dy, dz)
+    return disk_Bx, disk_By, disk_Bz, scale
 
-        Bxd_center = Bxd[N//2, N//2, N//2]
-        Bxr_center = ring_Bx[N//2, N//2, N//2]
+def get_B_disk_scaled_by_ring(X, Y, Z, I, r1, r2, n_turns, ring_r, dx, dy, dz):
+    """
+    Returns:
+        tuple[
+        -    np.array(N, N, N): disk_Bx, 
+        -    np.array(N, N, N): disk_By,
+        -    np.array(N, N, N): disk_Bz,
+        -    float: scale
+        ]
 
-        scale = Bxr_center / Bxd_center
+    Scale is used to determine how much to scale down the current to produce a new B-disk that aligns with B-ring at the throat
 
-        Axd, Ayd, Azd = _A_single_n_turn_coil(X, Y, Z, 'x', 0.0, I * scale, r1, r2, n_turns)
-        Bd = curlA(Axd, Ayd, Azd, dx, dy, dz)
-        disk_Bx, disk_By, disk_Bz = Bd['x'], Bd['y'], Bd['z']
+    When retrieving the scale, it is meant to be used as follows:
+    - `new_current = old_current * scale`
+    """
+    # Get initial B-disk without any scaling done, simply I in each loop
+    N = X.shape[0]
+    Axd, Ayd, Azd = _A_single_n_turn_coil(X, Y, Z, 'x', 0.0, I, r1, r2, n_turns)
+    Bd = curlA(Axd, Ayd, Azd, dx, dy, dz)
+    Bxd, Byd, Bzd = Bd['x'], Bd['y'], Bd['z']
+    # Get reference ring strength to determine scaling factor
+    ring_Bx, _, _ = get_B_ring(X, Y, Z, I, ring_r, dx, dy, dz)
 
-    else:
-        scale = 1
-        disk_Bx = Bxd 
-        disk_By = Byd 
-        disk_Bz = Bzd
+    # Pull maximum @ throat for each
+    Bxd_center = np.max(Bxd[:, N//2, N//2]) #Bxd[N//2, N//2, N//2]
+    Bxr_center = np.max(ring_Bx[:, N//2, N//2]) # ring_Bx[N//2, N//2, N//2]
+
+    scale = Bxr_center / Bxd_center
+
+    Axd, Ayd, Azd = _A_single_n_turn_coil(X, Y, Z, 'x', 0.0, I * scale, r1, r2, n_turns)
+    Bd = curlA(Axd, Ayd, Azd, dx, dy, dz)
+    disk_Bx, disk_By, disk_Bz = Bd['x'], Bd['y'], Bd['z']
 
     return disk_Bx, disk_By, disk_Bz, scale
 

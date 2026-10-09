@@ -21,7 +21,7 @@ NUM_DIAGS = 100
 class SingleCoil3DConfig:
 
     # Stream params
-    n_stream:   float = 1e17     # m^-3
+    n_stream:   float = 1e19     # m^-3
     v_drift:    float = 1e5      # m/s, magnitude (flow toward -x)
     T_e_eV:     float = 1000.0       # electron fluid temperature
     T_i_eV:     float = 1000.0       # ion thermal spread on injection
@@ -47,7 +47,7 @@ class SingleCoil3DConfig:
     r1:         float = 0.1         # inner radius of disk
     r2:         float = 0.6         # outer radius of disk
     n_turns:    int   = 10          # number of turns between this r1 and r2
-    scale_down: bool  = False
+    scale_down: bool  = True       # Whether or not to scale to ring, this allows for easily managing beta balancing (as it will have same B_throat as ring)
 
     # Derived — not set by user
     R_coil:     float = field(init=False)   # coil radius (m)
@@ -65,22 +65,28 @@ class SingleCoil3DConfig:
     v_drift_scale: float = field(init=False) 
 
     def __post_init__(self):
+        aext.POLYWELL_COILS = ['x',1,1]
+        xs = np.linspace(-self.L, self.L, self.N)
+        dx = xs[1] - xs[0]
+        X, Y, Z = np.meshgrid(xs, xs, xs, indexing='ij')
 
         # If we use a disk, the current will be scaled, and this will be stored within the config file
         if self.disk:
-            aext.POLYWELL_COILS = ['x',1,1]
-            xs = np.linspace(-self.L, self.L, self.N)
-            dx = xs[1] - xs[0]
-            X, Y, Z = np.meshgrid(xs, xs, xs, indexing='ij')
-            self_scale = 10
-            disk_Bx, _, _, scale = aext.get_B_disk(X, Y, Z, self.I / self_scale, self.r1, self.r2, self.n_turns, 0.5, dx, dx, dx, self.scale_down)
+            print(f"[coil type] Using disk")
+            # self_scale = 10
+            if self.scale_down:
+                disk_Bx, _, _, scale = aext.get_B_disk_scaled_by_ring(X, Y, Z, self.I, self.r1, self.r2, self.n_turns, 0.5, dx, dx, dx)
+            else:
+                disk_Bx, _, _, scale = aext.get_B_disk(X, Y, Z, self.I, self.r1, self.r2, self.n_turns, 0.5, dx, dx, dx)
             ring_Bx, _, _ = aext.get_B_ring(X, Y, Z, self.I, 0.5, dx, dx, dx)
-            self.I /= self_scale
-            print(f"I used: {self.I} A")
+            self.I *= scale
+            print(f"[Current used in each turn of disk] I_turn = {self.I:.3f} A")
             slice_x = np.s_[:, self.N//2, self.N//2]
             print(f"Disk vs Ring @ center:\nRing @ center: {np.max(ring_Bx[slice_x])}\nDisk @ center: {np.max(disk_Bx[slice_x])}")
+            self.B_ref = np.max(disk_Bx[slice_x])
 
         else:
+            self.B_ref = aext.get_B_ring(X, Y, Z, self.I, 0.5, dx, dx, dx)
             print(f"[coil type] Using ring")
 
         self.v_drift_scale = 1
@@ -91,51 +97,45 @@ class SingleCoil3DConfig:
         self.dx     = 2 * self.L / self.N
         self.eps    = self.dx                        # one cell, matches coil_2d convention
 
+        # RMS speed
+        v_ion = np.sqrt(2 * self.T_i_eV * sc.eV / sc.m_p)
+        print(f"[vion] {v_ion:.3e} m/s")
+        # Cyclotron frequency
+        w_ci = E_C * self.B_ref / sc.m_p
+        print(f"[w_ci] {w_ci:.3e} rad/s")
+        # Ion frequency
+        w_pi = np.sqrt(self.n_stream * E_C**2 / (EPS0 * sc.m_p))
+        print(f"[Plasma frequency] {w_pi:.3e} rad/s")
+        self.d_i = sc.c / w_pi
+        print(f"[ion inertial length] {self.d_i*100:.3e} cm")
+        di_resolution = self.d_i / self.dx
+        print(f"[inertial length vs dx] {di_resolution:.3f} d_i/dx")
+        if (di_resolution) < 1:
+            print("[WARNING] Ion inertial length is not resolved")
+
+        r_i = self.v_drift / w_ci 
+        r_ci_thermal = v_ion / w_ci
+        print(f"[gyroradius-ram @ B-throat, ram] {r_i*100:.3f} cm")
+        print(f"[gyroradius-th @ B-throat, th] {r_ci_thermal*100:.3f} cm")
+
+        conservative_dt = 1.0 / (50.0 * w_ci)
+        print(f"[conservative dt (50*w_ci)] {conservative_dt:3e}")
+        print(f"[conservative b_dt (50*w_ci*{self.substeps})] {conservative_dt / self.substeps:.3e}")
+        self.dt = conservative_dt
+
+        # Calculating reference beta values for this run
         self.m_i    = sc.m_p
         self.rho    = self.n_stream * self.m_i
         self.P_ram  = self.rho * self.v_drift**2
         Ti_J = self.T_i_eV * sc.eV
         Te_J = self.T_e_eV * sc.eV
         self.P_th = self.n_stream * (Ti_J + Te_J)
+        p_B = self.B_ref**2 / (2 * MU0)
+        print(f"[beta_th @ B_ref (throat)]: {self.P_th / p_B:.3f}")
+        print(f"[beta_k @ B_ref (throat)]: {self.P_ram / p_B:.3f}")
+        print(f"[beta_tot @ B_ref (throat)]: {(self.P_th + self.P_ram) / p_B:.3f}")
 
-        self.d_i      = sc.c / np.sqrt(self.n_stream * sc.e**2 / (sc.epsilon_0 * self.m_i))
         self.n_floor  = self.n_floor_frac * self.n_stream
-
-        v_ion = np.sqrt(2 * self.T_i_eV * sc.eV / sc.m_p)
-        B_coil = (MU0 * self.I) / self.dia if not self.disk else np.max(disk_Bx[:, self.N // 2, self.N // 2])
-        w_ci = E_C * B_coil / sc.m_p
-        conservative_dt = 1.0 / (50.0 * w_ci)
-        print(f"[vion] {v_ion:.3e} m/s")
-        print(f"[B_coil] {B_coil:.3e} T")
-        print(f"[w_ci] {w_ci:.3e} rad/s")
-        print(f"[conservative dt] {conservative_dt:3e}")
-        print(f"[conservative b_dt] {conservative_dt / self.substeps:.3e}")
-        self.dt = conservative_dt
-        r_i = self.v_drift / w_ci 
-        r_ci_thermal = v_ion / w_ci
-        print(f"[gyroradius min, ram] {r_i*100:.3f} cm")
-        print(f"[gyroradius min, th] {r_ci_thermal*100:.3f} cm")
-        w_pi = np.sqrt(self.n_stream * E_C**2 / (EPS0 * sc.m_p))
-        print(f"[ion frequency] {w_pi:.3e}")
-        inertial_length = (sc.c / w_pi)
-        print(f"[ion inertial length]: {inertial_length*100:.2e} cm, {self.d_i*100:.2e} cm")
-
-        Ti_J = self.T_i_eV * sc.eV
-        Te_J = self.T_e_eV * sc.eV
-        print("BETA THERMAL AT COIL CENTER: ")
-        p_plasma = self.n_stream * (Ti_J + Te_J)
-        p_B = B_coil**2 / (2 * MU0)
-        print(f'[beta thermal] {p_plasma / p_B:.3e}')
-
-        print("BETA DYNAMIC AT COIL CENTER:")
-        print(f"[beta dynamic] {self.P_ram / p_B:.3e}")
-
-        print(f"[true beta] {(p_plasma + self.P_ram) / p_B:.3e}")
-
-        print("possible eta_H")
-        alpha = 0.003
-        num = alpha * inertial_length**2 * w_ci * (sc.m_e / sc.m_p) * self.dx**2
-        print(f"{num:.2f}")
 
 if __name__ == "__main__":
 
@@ -165,7 +165,7 @@ if __name__ == "__main__":
         grid=grid,
         Te=cfg.T_e_eV,
         n0=cfg.n_stream,
-        gamma=5.0/3.0,
+        gamma=1,
         n_floor=cfg.n_floor,                 # 5% of upstream — caps 1/n amplification in the deepening cavity
         plasma_resistivity=cfg.eta_bg,               # uniform; coil islands emulated via callback
         plasma_hyper_resistivity=cfg.eta_H,         # Ohm·m^3; overdamps grid-Nyquist whistlers at peak |B|~0.13T
@@ -212,6 +212,8 @@ if __name__ == "__main__":
     print("[time needed]")
     transits = t_sim * cfg.v_drift / (2 * cfg.L)
     print(f"[transits] {transits}")
+
+    exit()
 
     field_diag = picmi.FieldDiagnostic(
         name="field_diag",
@@ -269,9 +271,9 @@ if __name__ == "__main__":
         warpx_use_filter=True,
     )
     sim.add_species(stream_i, layout=layout)
-    # sim.add_diagnostic(field_diag)
-    # sim.add_diagnostic(part_diag)
-    # sim.add_diagnostic(scraping_diag)
+    sim.add_diagnostic(field_diag)
+    sim.add_diagnostic(part_diag)
+    sim.add_diagnostic(scraping_diag)
     sim.add_diagnostic(field_energy_reduced_diag)
     sim.add_diagnostic(particle_energy_reduced_diag)
 
