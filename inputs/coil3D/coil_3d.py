@@ -21,7 +21,7 @@ NUM_DIAGS = 100
 class SingleCoil3DConfig:
 
     # Stream params
-    n_stream:   float = 1e19     # m^-3
+    n_stream:   float = 1e18     # m^-3
     v_drift:    float = 1e5      # m/s, magnitude (flow toward -x)
     T_e_eV:     float = 1000.0       # electron fluid temperature
     T_i_eV:     float = 1000.0       # ion thermal spread on injection
@@ -212,8 +212,6 @@ if __name__ == "__main__":
     print("[time needed]")
     transits = t_sim * cfg.v_drift / (2 * cfg.L)
     print(f"[transits] {transits}")
-
-    exit()
 
     field_diag = picmi.FieldDiagnostic(
         name="field_diag",
