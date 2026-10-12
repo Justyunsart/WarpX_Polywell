@@ -69,11 +69,11 @@ class SingleCoil3DConfig:
         xs = np.linspace(-self.L, self.L, self.N)
         dx = xs[1] - xs[0]
         X, Y, Z = np.meshgrid(xs, xs, xs, indexing='ij')
+        slice_x = np.s_[:, self.N//2, self.N//2]
 
         # If we use a disk, the current will be scaled, and this will be stored within the config file
         if self.disk:
             print(f"[coil type] Using disk")
-            # self_scale = 10
             if self.scale_down:
                 disk_Bx, _, _, scale = aext.get_B_disk_scaled_by_ring(X, Y, Z, self.I, self.r1, self.r2, self.n_turns, 0.5, dx, dx, dx)
             else:
@@ -81,12 +81,12 @@ class SingleCoil3DConfig:
             ring_Bx, _, _ = aext.get_B_ring(X, Y, Z, self.I, 0.5, dx, dx, dx)
             self.I *= scale
             print(f"[Current used in each turn of disk] I_turn = {self.I:.3f} A")
-            slice_x = np.s_[:, self.N//2, self.N//2]
             print(f"Disk vs Ring @ center:\nRing @ center: {np.max(ring_Bx[slice_x])}\nDisk @ center: {np.max(disk_Bx[slice_x])}")
             self.B_ref = np.max(disk_Bx[slice_x])
 
         else:
-            self.B_ref = aext.get_B_ring(X, Y, Z, self.I, 0.5, dx, dx, dx)
+            Bx_ring, _, _ = aext.get_B_ring(X, Y, Z, self.I, 0.5, dx, dx, dx)
+            self.B_ref = np.max(Bx_ring[slice_x])
             print(f"[coil type] Using ring")
 
         self.v_drift_scale = 1
@@ -165,7 +165,7 @@ if __name__ == "__main__":
         grid=grid,
         Te=cfg.T_e_eV,
         n0=cfg.n_stream,
-        gamma=1,
+        gamma=5/3,
         n_floor=cfg.n_floor,                 # 5% of upstream — caps 1/n amplification in the deepening cavity
         plasma_resistivity=cfg.eta_bg,               # uniform; coil islands emulated via callback
         plasma_hyper_resistivity=cfg.eta_H,         # Ohm·m^3; overdamps grid-Nyquist whistlers at peak |B|~0.13T
@@ -212,8 +212,6 @@ if __name__ == "__main__":
     print("[time needed]")
     transits = t_sim * cfg.v_drift / (2 * cfg.L)
     print(f"[transits] {transits}")
-
-    exit()
 
     field_diag = picmi.FieldDiagnostic(
         name="field_diag",
