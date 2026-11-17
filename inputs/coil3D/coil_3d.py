@@ -1,9 +1,10 @@
 import numpy as np
 import scipy.constants as sc
 from pywarpx import picmi, warpx
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 import matplotlib.pyplot as plt
 import warpx_polywell.bext.aext as aext
+from warpx_polywell.utils.config_coil3d import save_cfg_to_json
 
 C    = sc.c
 E_C  = sc.e
@@ -21,10 +22,10 @@ NUM_DIAGS = 100
 class SingleCoil3DConfig:
 
     # Stream params
-    n_stream:   float = 1e19     # m^-3
-    v_drift:    float = 1e5      # m/s, magnitude (flow toward -x)
-    T_e_eV:     float = 1000.0       # electron fluid temperature
-    T_i_eV:     float = 1000.0       # ion thermal spread on injection
+    n_stream:   float = 1e17     # m^-3
+    v_drift:    float = 4.38e5      # m/s, magnitude (flow toward -x)
+    T_e_eV:     float = 10.0       # electron fluid temperature
+    T_i_eV:     float = 10.0       # ion thermal spread on injection
 
     # Coil params (coil sits at x=0, axis along x)
     I:          float = 2.25e4       # A, reference current when using disk
@@ -38,12 +39,13 @@ class SingleCoil3DConfig:
     # Numerical stability (mirrors coil_2d.py)
     eta_bg:     float = 1.0e-7     # background resistivity (Ohm·m)
     eta_coil:   float = 1.0e3      # coil island resistivity (Ohm·m)
-    eta_H:      float = 9.0e-4     # hyper-resistivity (Ohm·m^3)
+    eta_H:      float = 9.0e-6     # hyper-resistivity (Ohm·m^3)
     n_floor_frac: float = 0.05     # n_floor as fraction of n_stream
     substeps:   int   = 100         # B-field substeps
+    gamma:      float = 5/3         # electron pressure closure constant 
 
     # disk vs ring configuration
-    disk:       bool  = True       # whether to use a ring or a disk 
+    disk:       bool  = False       # whether to use a ring or a disk 
     r1:         float = 0.1         # inner radius of disk
     r2:         float = 0.6         # outer radius of disk
     n_turns:    int   = 10          # number of turns between this r1 and r2
@@ -56,13 +58,11 @@ class SingleCoil3DConfig:
     m_i:        float = field(init=False)
     rho:        float = field(init=False)   # upstream mass density
     P_ram:      float = field(init=False)   # ram pressure
+    P_th:       float = field(init=False)   # thermal pressure
     B_ref:      float = field(init=False)   # |B| at r_CF
-    r_CF:       float = field(init=False)   # Chapman-Ferraro standoff (m)
-    Omega_ci:   float = field(init=False)   # ion cyclotron freq at r_CF
     d_i:        float = field(init=False)   # ion inertial length
     dt:         float = field(init=False)   # outer timestep
     n_floor:    float = field(init=False)   # absolute density floor
-    v_drift_scale: float = field(init=False) 
 
     def __post_init__(self):
         aext.POLYWELL_COILS = ['x',1,1]
@@ -89,7 +89,7 @@ class SingleCoil3DConfig:
             self.B_ref = np.max(Bx_ring[slice_x])
             print(f"[coil type] Using ring")
 
-        self.v_drift_scale = 1
+        print(f"[B ref] {self.B_ref}")
 
         MU0 = sc.mu_0
 
@@ -117,6 +117,10 @@ class SingleCoil3DConfig:
         r_ci_thermal = v_ion / w_ci
         print(f"[gyroradius-ram @ B-throat, ram] {r_i*100:.3f} cm")
         print(f"[gyroradius-th @ B-throat, th] {r_ci_thermal*100:.3f} cm")
+
+        w_ce = E_C * self.B_ref / sc.m_e
+        r_e = self.v_drift / w_ce
+        print(f"[E:ECTRPM SCALES] {w_ce:.3e}, {r_e * 100:.3e} cm")
 
         conservative_dt = 1.0 / (50.0 * w_ci)
         print(f"[conservative dt (50*w_ci)] {conservative_dt:3e}")
@@ -165,7 +169,7 @@ if __name__ == "__main__":
         grid=grid,
         Te=cfg.T_e_eV,
         n0=cfg.n_stream,
-        gamma=5/3,
+        gamma=cfg.gamma,
         n_floor=cfg.n_floor,                 # 5% of upstream — caps 1/n amplification in the deepening cavity
         plasma_resistivity=cfg.eta_bg,               # uniform; coil islands emulated via callback
         plasma_hyper_resistivity=cfg.eta_H,         # Ohm·m^3; overdamps grid-Nyquist whistlers at peak |B|~0.13T
@@ -202,7 +206,7 @@ if __name__ == "__main__":
 
     # This ensures we always run for 20us regardless of the standoff
     # This compensates for slowly drift velocities as well
-    MAX_STEPS = int((TOTAL_TIME / cfg.dt) * cfg.v_drift_scale)
+    MAX_STEPS = int((TOTAL_TIME / cfg.dt))
     print(f"[max steps] {MAX_STEPS}")
     PERIOD = MAX_STEPS // NUM_DIAGS
     print(f"[diag period] {PERIOD}")
@@ -456,4 +460,5 @@ if __name__ == "__main__":
     # marks it completed on clean exit, and removes it on failure.
     from warpx_polywell.db.runs import run_session
     with run_session(__file__, {}):
+        save_cfg_to_json(cfg, '.')
         sim.step()
